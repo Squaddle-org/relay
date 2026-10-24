@@ -54,6 +54,22 @@ func (s *State) Invites() []Invite {
 	return out
 }
 
+// Member is one (user, role) pair - for callers (package store) that need to enumerate the whole
+// room rather than look up a single user via RoleOf.
+type Member struct {
+	User []byte
+	Role Role
+}
+
+func (s *State) Members() []Member {
+	out := make([]Member, 0, len(s.roles))
+	for userHex, role := range s.roles {
+		user, _ := hex.DecodeString(userHex)
+		out = append(out, Member{User: user, Role: role})
+	}
+	return out
+}
+
 func hexKey(b []byte) string { return hex.EncodeToString(b) }
 
 // Apply validates stored.Entry against the current state and returns the next state, or a

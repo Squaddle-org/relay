@@ -2,23 +2,24 @@
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE device_certs (
+CREATE TABLE IF NOT EXISTS device_certs (
   user_key    BLOB NOT NULL,
   device_key  BLOB NOT NULL PRIMARY KEY,
   cert_cbor   BLOB NOT NULL,
   revoked_at  INTEGER
 );
-CREATE INDEX device_certs_user ON device_certs(user_key);
+CREATE INDEX IF NOT EXISTS device_certs_user ON device_certs(user_key);
 
-CREATE TABLE rooms (
-  room_id     BLOB PRIMARY KEY,
-  head_hash   BLOB NOT NULL,
-  next_index  INTEGER NOT NULL,
-  epoch       INTEGER NOT NULL,
-  created_at  INTEGER NOT NULL
+CREATE TABLE IF NOT EXISTS rooms (
+  room_id          BLOB PRIMARY KEY,
+  head_hash        BLOB NOT NULL,
+  next_index       INTEGER NOT NULL,
+  epoch            INTEGER NOT NULL,
+  rotation_pending INTEGER NOT NULL DEFAULT 0, -- ADR-0012 (PROTOCOL.md §3.4)
+  created_at       INTEGER NOT NULL
 );
 
-CREATE TABLE log_entries (
+CREATE TABLE IF NOT EXISTS log_entries (
   room_id     BLOB NOT NULL REFERENCES rooms(room_id),
   idx         INTEGER NOT NULL,
   entry_hash  BLOB NOT NULL,
@@ -28,14 +29,14 @@ CREATE TABLE log_entries (
 );
 
 -- Materialized from log for fast authorization checks; rebuildable from log_entries.
-CREATE TABLE members (
+CREATE TABLE IF NOT EXISTS members (
   room_id     BLOB NOT NULL REFERENCES rooms(room_id),
   user_key    BLOB NOT NULL,
   role        TEXT NOT NULL CHECK (role IN ('owner','admin','member','pending')),
   PRIMARY KEY (room_id, user_key)
 );
 
-CREATE TABLE invites (
+CREATE TABLE IF NOT EXISTS invites (
   room_id           BLOB NOT NULL REFERENCES rooms(room_id),
   invite_id         BLOB NOT NULL,          -- 16 bytes
   expires_at        INTEGER,
@@ -47,7 +48,7 @@ CREATE TABLE invites (
   PRIMARY KEY (room_id, invite_id)
 );
 
-CREATE TABLE ops (
+CREATE TABLE IF NOT EXISTS ops (
   cursor      INTEGER PRIMARY KEY AUTOINCREMENT,
   room_id     BLOB NOT NULL REFERENCES rooms(room_id),
   op_id       BLOB NOT NULL UNIQUE,
@@ -58,9 +59,9 @@ CREATE TABLE ops (
   received_at INTEGER NOT NULL,
   UNIQUE (room_id, device_key, seq)
 );
-CREATE INDEX ops_room_cursor ON ops(room_id, cursor);
+CREATE INDEX IF NOT EXISTS ops_room_cursor ON ops(room_id, cursor);
 
-CREATE TABLE snapshots (
+CREATE TABLE IF NOT EXISTS snapshots (
   room_id       BLOB NOT NULL REFERENCES rooms(room_id),
   covers_up_to  INTEGER NOT NULL,
   snapshot_cbor BLOB NOT NULL,
@@ -68,21 +69,21 @@ CREATE TABLE snapshots (
   PRIMARY KEY (room_id, covers_up_to)
 );
 
-CREATE TABLE push_endpoints (
+CREATE TABLE IF NOT EXISTS push_endpoints (
   device_key  BLOB PRIMARY KEY,
   endpoint    TEXT NOT NULL,
   updated_at  INTEGER NOT NULL
 );
 
-CREATE TABLE link_mailbox (
+CREATE TABLE IF NOT EXISTS link_mailbox (
   code        BLOB NOT NULL,                -- 16 bytes
   blob        BLOB NOT NULL,
   expires_at  INTEGER NOT NULL
 );
-CREATE INDEX link_mailbox_code ON link_mailbox(code);
+CREATE INDEX IF NOT EXISTS link_mailbox_code ON link_mailbox(code);
 
 -- PROTOCOL.md §8. Relay-local policy, never part of the signed log.
-CREATE TABLE entitlements (
+CREATE TABLE IF NOT EXISTS entitlements (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   room_id       BLOB NOT NULL REFERENCES rooms(room_id),
   provider      TEXT NOT NULL CHECK (provider IN ('google_play','voucher')),
@@ -92,9 +93,9 @@ CREATE TABLE entitlements (
   created_at    INTEGER NOT NULL,
   UNIQUE (provider, purchase_ref)          -- one purchase boosts exactly one room
 );
-CREATE INDEX entitlements_room ON entitlements(room_id, until);
+CREATE INDEX IF NOT EXISTS entitlements_room ON entitlements(room_id, until);
 
-CREATE TABLE vouchers (
+CREATE TABLE IF NOT EXISTS vouchers (
   code_hash     BLOB PRIMARY KEY,          -- BLAKE2b of the code, never store plaintext
   tier          TEXT NOT NULL,
   duration_days INTEGER,                   -- NULL = permanent (tier 'unlimited')

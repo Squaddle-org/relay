@@ -34,8 +34,8 @@ func (c DeviceCert) unsignedCbor() ([]byte, error) {
 	return EncodeCanonical(c)
 }
 
-// fullCbor is all fields 0..6 incl. Sig - the complete signed structure as it travels on the wire.
-func (c DeviceCert) fullCbor() ([]byte, error) {
+// FullCbor is all fields 0..6 incl. Sig - the complete signed structure as it travels on the wire.
+func (c DeviceCert) FullCbor() ([]byte, error) {
 	return EncodeCanonical(c)
 }
 
