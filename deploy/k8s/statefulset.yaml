@@ -1,0 +1,34 @@
+# Single replica: SQLite. Scale-out = later (Postgres or Litestream + leader).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: relay
+spec:
+  serviceName: relay
+  replicas: 1
+  selector:
+    matchLabels: { app: relay }
+  template:
+    metadata:
+      labels: { app: relay }
+    spec:
+      securityContext: { runAsNonRoot: true, fsGroup: 65532 }
+      containers:
+        - name: relay
+          image: ghcr.io/squaddle-org/relay:edge
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: metrics, containerPort: 9090 }
+          readinessProbe: { httpGet: { path: /healthz, port: metrics } }
+          livenessProbe: { httpGet: { path: /healthz, port: metrics }, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          securityContext: { readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: { requests: { storage: 2Gi } }
