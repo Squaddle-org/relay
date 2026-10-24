@@ -73,7 +73,7 @@ func getLog(st *store.Store) http.HandlerFunc {
 // does - no separate relay-only business logic. "Non-members may only append `join`"
 // (relay-api.yaml) falls out of that same validation: every other entry type requires an
 // existing role.
-func postLog(st *store.Store, notifier *pushNotifier) http.HandlerFunc {
+func postLog(st *store.Store, notifier *pushNotifier, hub *wsHub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		room, ok := b64PathParam(r, "room")
 		if !ok {
@@ -97,6 +97,7 @@ func postLog(st *store.Store, notifier *pushNotifier) http.HandlerFunc {
 		}
 		runInviteLifecycleSideEffects(st, room, *entry)
 		notifier.notify(st, room, int64(entry.Index))
+		hub.broadcast(room, int64(entry.Index), "log")
 		writeAppended(w, entry.Index, rts)
 	}
 }

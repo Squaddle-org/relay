@@ -91,7 +91,7 @@ func getOps(st *store.Store) http.HandlerFunc {
 // envelope's signature must verify, its device must belong to its author and not be revoked, and
 // its epoch must match the room's current epoch - a single stale/invalid op rejects the entire
 // batch (matches "409: stale_epoch" being a batch-level response, not per-op).
-func postOps(st *store.Store, notifier *pushNotifier) http.HandlerFunc {
+func postOps(st *store.Store, notifier *pushNotifier, hub *wsHub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		room, ok := b64PathParam(r, "room")
 		if !ok {
@@ -161,7 +161,9 @@ func postOps(st *store.Store, notifier *pushNotifier) http.HandlerFunc {
 			cursors = append(cursors, cursor)
 		}
 
-		notifier.notify(st, room, cursors[len(cursors)-1])
+		lastCursor := cursors[len(cursors)-1]
+		notifier.notify(st, room, lastCursor)
+		hub.broadcast(room, lastCursor, "ops")
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)

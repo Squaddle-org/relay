@@ -1,5 +1,4 @@
-// Package api implements relay-api.yaml. WebSocket fanout, /metrics, and limits/entitlements are
-// still 501 stubs - B8/B9.
+// Package api implements relay-api.yaml. Limits/entitlements are still 501 stubs - B9.
 package api
 
 import (
@@ -15,6 +14,7 @@ func NewRouter(log *slog.Logger, st *store.Store) http.Handler {
 	replay := newReplayCache()
 	limiter := newEnvelopeRateLimiter()
 	notifier := newPushNotifier()
+	hub := newWsHub()
 	auth := func(h http.HandlerFunc) http.HandlerFunc { return requestAuth(replay, h) }
 
 	mux.HandleFunc("PUT /v1/users/{user}/devices/{device}", auth(putDevice(st)))
@@ -22,9 +22,9 @@ func NewRouter(log *slog.Logger, st *store.Store) http.Handler {
 	mux.HandleFunc("POST /v1/users/{user}/revocations", auth(postRevocation(st)))
 	mux.HandleFunc("POST /v1/rooms", auth(postRoom(st)))
 	mux.HandleFunc("GET /v1/rooms/{room}/log", auth(getLog(st)))
-	mux.HandleFunc("POST /v1/rooms/{room}/log", auth(postLog(st, notifier)))
+	mux.HandleFunc("POST /v1/rooms/{room}/log", auth(postLog(st, notifier, hub)))
 	mux.HandleFunc("GET /v1/rooms/{room}/ops", auth(getOps(st)))
-	mux.HandleFunc("POST /v1/rooms/{room}/ops", auth(postOps(st, notifier)))
+	mux.HandleFunc("POST /v1/rooms/{room}/ops", auth(postOps(st, notifier, hub)))
 	mux.HandleFunc("GET /v1/rooms/{room}/limits", notImplemented)  // B9
 	mux.HandleFunc("POST /v1/entitlements", notImplemented)        // B9
 	mux.HandleFunc("POST /v1/billing/google/rtdn", notImplemented) // M5b - out of M2 scope
@@ -36,14 +36,14 @@ func NewRouter(log *slog.Logger, st *store.Store) http.Handler {
 	mux.HandleFunc("GET /v1/link/{code}", getLinkMailbox(st))   // unauthenticated, relay-api.yaml
 	mux.HandleFunc("POST /v1/push", auth(postPushRegister(st)))
 	mux.HandleFunc("DELETE /v1/push", auth(deletePushRegister(st)))
-	mux.HandleFunc("GET /v1/ws", notImplemented) // B8
-	return logRequests(log, mux)
+	mux.HandleFunc("GET /v1/ws", auth(serveWS(st, hub)))
+	return logRequests(log, metricsMiddleware(mux))
 }
 
 func NewInternalRouter() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	// TODO(B8): /metrics via prometheus/client_golang
+	mux.Handle("GET /metrics", metricsHandler())
 	return mux
 }
 
