@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/squaddle-org/relay/internal/limits"
 	"github.com/squaddle-org/relay/internal/membership"
 	"github.com/squaddle-org/relay/internal/proto"
 	"github.com/squaddle-org/relay/internal/store"
@@ -72,8 +73,9 @@ func getLog(st *store.Store) http.HandlerFunc {
 // membership.State.Apply (chain + full §3.3 authorization) exactly as core's own state machine
 // does - no separate relay-only business logic. "Non-members may only append `join`"
 // (relay-api.yaml) falls out of that same validation: every other entry type requires an
-// existing role.
-func postLog(st *store.Store, notifier *pushNotifier, hub *wsHub) http.HandlerFunc {
+// existing role. §8.2's room_full/quota_exceeded limits are checked first, before Apply ever
+// sees join/approve/inviteCreate - they're relay policy, not a membership-log rule (ADR-0010).
+func postLog(st *store.Store, notifier *pushNotifier, hub *wsHub, policy *limits.Policy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		room, ok := b64PathParam(r, "room")
 		if !ok {
@@ -88,6 +90,10 @@ func postLog(st *store.Store, notifier *pushNotifier, hub *wsHub) http.HandlerFu
 		entry, err := proto.DecodeLogEntry(body)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid", "not a canonical LogEntry")
+			return
+		}
+		if limitErr := checkLogEntryLimits(st, policy, room, *entry); limitErr != nil {
+			writeLimitError(w, limitErr)
 			return
 		}
 		rts := uint64(time.Now().Unix())

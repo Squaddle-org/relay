@@ -1,4 +1,4 @@
-// Package api implements relay-api.yaml. Limits/entitlements are still 501 stubs - B9.
+// Package api implements relay-api.yaml. google_play entitlements are M5b - out of M2 scope.
 package api
 
 import (
@@ -6,10 +6,11 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/squaddle-org/relay/internal/limits"
 	"github.com/squaddle-org/relay/internal/store"
 )
 
-func NewRouter(log *slog.Logger, st *store.Store) http.Handler {
+func NewRouter(log *slog.Logger, st *store.Store, policy *limits.Policy) http.Handler {
 	mux := http.NewServeMux()
 	replay := newReplayCache()
 	limiter := newEnvelopeRateLimiter()
@@ -22,11 +23,11 @@ func NewRouter(log *slog.Logger, st *store.Store) http.Handler {
 	mux.HandleFunc("POST /v1/users/{user}/revocations", auth(postRevocation(st)))
 	mux.HandleFunc("POST /v1/rooms", auth(postRoom(st)))
 	mux.HandleFunc("GET /v1/rooms/{room}/log", auth(getLog(st)))
-	mux.HandleFunc("POST /v1/rooms/{room}/log", auth(postLog(st, notifier, hub)))
+	mux.HandleFunc("POST /v1/rooms/{room}/log", auth(postLog(st, notifier, hub, policy)))
 	mux.HandleFunc("GET /v1/rooms/{room}/ops", auth(getOps(st)))
 	mux.HandleFunc("POST /v1/rooms/{room}/ops", auth(postOps(st, notifier, hub)))
-	mux.HandleFunc("GET /v1/rooms/{room}/limits", notImplemented)  // B9
-	mux.HandleFunc("POST /v1/entitlements", notImplemented)        // B9
+	mux.HandleFunc("GET /v1/rooms/{room}/limits", auth(getLimits(st, policy)))
+	mux.HandleFunc("POST /v1/entitlements", auth(postEntitlements(st)))
 	mux.HandleFunc("POST /v1/billing/google/rtdn", notImplemented) // M5b - out of M2 scope
 	mux.HandleFunc("GET /v1/rooms/{room}/snapshots/latest", auth(getLatestSnapshot(st)))
 	mux.HandleFunc("POST /v1/rooms/{room}/snapshots", auth(postSnapshot(st)))

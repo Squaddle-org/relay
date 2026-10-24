@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/squaddle-org/relay/internal/limits"
 	"github.com/squaddle-org/relay/internal/store"
 )
 
@@ -24,7 +25,7 @@ func TestStubsReturn501(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer st.Close()
-	h := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), st)
+	h := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), st, limits.NewPolicy("none", ""))
 	rec := httptest.NewRecorder()
 	// POST /billing/google/rtdn is unauthenticated (security: [] in relay-api.yaml) and still a
 	// stub (M5b, out of M2 scope) - safe to hit directly without a signed request.

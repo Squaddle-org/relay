@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/squaddle-org/relay/internal/limits"
 	"github.com/squaddle-org/relay/internal/membership"
 	"github.com/squaddle-org/relay/internal/proto"
 	"github.com/squaddle-org/relay/internal/store"
@@ -116,7 +117,8 @@ func newTestRouter(t *testing.T) (http.Handler, *store.Store) {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	return NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), st), st
+	policy := limits.NewPolicy("none", "") // unlimited, same as every test assumed before limits existed
+	return NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), st, policy), st
 }
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
