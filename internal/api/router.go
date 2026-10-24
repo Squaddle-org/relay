@@ -1,42 +1,48 @@
-// Package api implements relay-api.yaml. Handlers are stubs until M2.
+// Package api implements relay-api.yaml. Content-plane (ops/snapshots/push), WebSocket fanout,
+// /metrics, and limits/entitlements are still 501 stubs - B7/B8/B9.
 package api
 
 import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+
+	"github.com/squaddle-org/relay/internal/store"
 )
 
-func NewRouter(log *slog.Logger) http.Handler {
+func NewRouter(log *slog.Logger, st *store.Store) http.Handler {
 	mux := http.NewServeMux()
-	todo := notImplemented
-	mux.HandleFunc("PUT /v1/users/{user}/devices/{device}", todo)
-	mux.HandleFunc("GET /v1/users/{user}/devices", todo)
-	mux.HandleFunc("POST /v1/users/{user}/revocations", todo)
-	mux.HandleFunc("POST /v1/rooms", todo)
-	mux.HandleFunc("GET /v1/rooms/{room}/log", todo)
-	mux.HandleFunc("POST /v1/rooms/{room}/log", todo)
-	mux.HandleFunc("GET /v1/rooms/{room}/ops", todo)
-	mux.HandleFunc("POST /v1/rooms/{room}/ops", todo)
-	mux.HandleFunc("GET /v1/rooms/{room}/limits", todo)
-	mux.HandleFunc("POST /v1/entitlements", todo)
-	mux.HandleFunc("POST /v1/billing/google/rtdn", todo)
-	mux.HandleFunc("GET /v1/rooms/{room}/snapshots/latest", todo)
-	mux.HandleFunc("POST /v1/rooms/{room}/snapshots", todo)
-	mux.HandleFunc("GET /v1/invites/{room}/{invite}/envelope", todo)
-	mux.HandleFunc("PUT /v1/invites/{room}/{invite}/envelope", todo)
-	mux.HandleFunc("POST /v1/link/{code}", todo)
-	mux.HandleFunc("GET /v1/link/{code}", todo)
-	mux.HandleFunc("POST /v1/push", todo)
-	mux.HandleFunc("DELETE /v1/push", todo)
-	mux.HandleFunc("GET /v1/ws", todo)
+	replay := newReplayCache()
+	limiter := newEnvelopeRateLimiter()
+	auth := func(h http.HandlerFunc) http.HandlerFunc { return requestAuth(replay, h) }
+
+	mux.HandleFunc("PUT /v1/users/{user}/devices/{device}", auth(putDevice(st)))
+	mux.HandleFunc("GET /v1/users/{user}/devices", listDevices(st)) // unauthenticated, relay-api.yaml
+	mux.HandleFunc("POST /v1/users/{user}/revocations", auth(postRevocation(st)))
+	mux.HandleFunc("POST /v1/rooms", auth(postRoom(st)))
+	mux.HandleFunc("GET /v1/rooms/{room}/log", auth(getLog(st)))
+	mux.HandleFunc("POST /v1/rooms/{room}/log", auth(postLog(st)))
+	mux.HandleFunc("GET /v1/rooms/{room}/ops", notImplemented)                                 // B7
+	mux.HandleFunc("POST /v1/rooms/{room}/ops", notImplemented)                                // B7
+	mux.HandleFunc("GET /v1/rooms/{room}/limits", notImplemented)                              // B9
+	mux.HandleFunc("POST /v1/entitlements", notImplemented)                                    // B9
+	mux.HandleFunc("POST /v1/billing/google/rtdn", notImplemented)                             // M5b - out of M2 scope
+	mux.HandleFunc("GET /v1/rooms/{room}/snapshots/latest", notImplemented)                    // B7
+	mux.HandleFunc("POST /v1/rooms/{room}/snapshots", notImplemented)                          // B7
+	mux.HandleFunc("GET /v1/invites/{room}/{invite}/envelope", getInviteEnvelope(st, limiter)) // unauthenticated, rate-limited
+	mux.HandleFunc("PUT /v1/invites/{room}/{invite}/envelope", auth(putInviteEnvelope(st)))
+	mux.HandleFunc("POST /v1/link/{code}", postLinkMailbox(st)) // unauthenticated, relay-api.yaml
+	mux.HandleFunc("GET /v1/link/{code}", getLinkMailbox(st))   // unauthenticated, relay-api.yaml
+	mux.HandleFunc("POST /v1/push", notImplemented)             // B7
+	mux.HandleFunc("DELETE /v1/push", notImplemented)           // B7
+	mux.HandleFunc("GET /v1/ws", notImplemented)                // B8
 	return logRequests(log, mux)
 }
 
 func NewInternalRouter() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	// TODO(M2): /metrics via prometheus/client_golang
+	// TODO(B8): /metrics via prometheus/client_golang
 	return mux
 }
 

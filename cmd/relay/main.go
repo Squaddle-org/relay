@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/squaddle-org/relay/internal/api"
+	"github.com/squaddle-org/relay/internal/store"
 )
 
 func main() {
@@ -25,7 +26,14 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	logger.Info("starting relay", "listen", *listen, "db", *dbPath, "limits", *limits, "unlimitedOwners", countList(*unlimitedOwners))
 
-	srv := &http.Server{Addr: *listen, Handler: api.NewRouter(logger), ReadHeaderTimeout: 10 * time.Second}
+	st, err := store.Open(*dbPath)
+	if err != nil {
+		logger.Error("opening store", "err", err)
+		os.Exit(1)
+	}
+	defer st.Close()
+
+	srv := &http.Server{Addr: *listen, Handler: api.NewRouter(logger, st), ReadHeaderTimeout: 10 * time.Second}
 	internal := &http.Server{Addr: *metrics, Handler: api.NewInternalRouter(), ReadHeaderTimeout: 5 * time.Second}
 
 	go func() { _ = internal.ListenAndServe() }()

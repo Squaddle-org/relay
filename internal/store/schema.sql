@@ -6,7 +6,8 @@ CREATE TABLE IF NOT EXISTS device_certs (
   user_key    BLOB NOT NULL,
   device_key  BLOB NOT NULL PRIMARY KEY,
   cert_cbor   BLOB NOT NULL,
-  revoked_at  INTEGER
+  revoked_at  INTEGER,
+  revoke_cbor BLOB  -- the signed DeviceRevoke itself, so GET /users/{user}/devices can serve it back
 );
 CREATE INDEX IF NOT EXISTS device_certs_user ON device_certs(user_key);
 

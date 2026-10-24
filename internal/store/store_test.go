@@ -155,11 +155,33 @@ func TestDeviceCertRoundTrip(t *testing.T) {
 		t.Fatalf("stored-then-loaded cert does not verify")
 	}
 
-	if err := s.RevokeDevice(actor.devicePub, 1_700_000_000); err != nil {
+	revoke := proto.DeviceRevoke{V: 1, User: actor.userPub, Device: actor.devicePub, RevokedAt: 1_700_000_000}
+	unsignedRevoke, err := proto.EncodeCanonical(struct {
+		V         uint64 `cbor:"0,keyasint"`
+		User      []byte `cbor:"1,keyasint"`
+		Device    []byte `cbor:"2,keyasint"`
+		RevokedAt uint64 `cbor:"3,keyasint"`
+	}{revoke.V, revoke.User, revoke.Device, revoke.RevokedAt})
+	if err != nil {
+		t.Fatalf("encoding unsigned revoke: %v", err)
+	}
+	revoke.Sig = ed25519.Sign(actor.userPriv, proto.SigningInput(proto.DeviceRevokeDomain, unsignedRevoke))
+	if !revoke.Verify() {
+		t.Fatalf("test bug: constructed revoke does not verify")
+	}
+
+	if err := s.RevokeDevice(revoke); err != nil {
 		t.Fatalf("RevokeDevice: %v", err)
 	}
 	if _, err := s.GetDeviceCert(actor.devicePub); err != ErrDeviceNotFound {
 		t.Fatalf("GetDeviceCert after revoke: got %v, want ErrDeviceNotFound", err)
+	}
+	entries, err := s.ListDeviceCertsAndRevocations(actor.userPub)
+	if err != nil {
+		t.Fatalf("ListDeviceCertsAndRevocations: %v", err)
+	}
+	if len(entries) != 1 || entries[0].CertCbor != nil || entries[0].RevokeCbor == nil {
+		t.Fatalf("ListDeviceCertsAndRevocations after revoke = %+v, want exactly one revoke entry", entries)
 	}
 }
 
