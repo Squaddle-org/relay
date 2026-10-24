@@ -88,7 +88,7 @@ CREATE TABLE entitlements (
   provider      TEXT NOT NULL CHECK (provider IN ('google_play','voucher')),
   purchase_ref  TEXT NOT NULL,             -- Play purchase token hash or voucher id
   tier          TEXT NOT NULL,
-  until         INTEGER NOT NULL,
+  until         INTEGER,                   -- NULL = no expiry (tier 'unlimited')
   created_at    INTEGER NOT NULL,
   UNIQUE (provider, purchase_ref)          -- one purchase boosts exactly one room
 );
@@ -97,7 +97,7 @@ CREATE INDEX entitlements_room ON entitlements(room_id, until);
 CREATE TABLE vouchers (
   code_hash     BLOB PRIMARY KEY,          -- BLAKE2b of the code, never store plaintext
   tier          TEXT NOT NULL,
-  duration_days INTEGER NOT NULL,
+  duration_days INTEGER,                   -- NULL = permanent (tier 'unlimited')
   redeemed_at   INTEGER,
   created_at    INTEGER NOT NULL
 );

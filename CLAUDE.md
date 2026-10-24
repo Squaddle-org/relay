@@ -9,6 +9,7 @@ Go relay for Squaddle. The spec lives in `../spec` (sibling checkout). **Read `.
   (`logentry.json`, `log-reject.json`). Same rules as `../core` membership.
 - Verify every signature with domain separation (PROTOCOL.md §1). Request auth per §5, replay cache, 60s window.
 - Limits are relay policy (§8): default `-limits=none`; downgrades never delete members or content.
+  Tier `unlimited` (§8.1a) only via `-unlimited-owners` allowlist (checked against the *current* owner) or permanent vouchers.
 - Never log request bodies, auth headers, invite ids with secrets, or push endpoints. Metrics without room ids as labels.
 - Dependencies: stdlib first. Allowed: `modernc.org/sqlite`, `github.com/fxamacker/cbor/v2`, `golang.org/x/crypto`,
   `github.com/coder/websocket`, `github.com/prometheus/client_golang`. Anything else → ask.

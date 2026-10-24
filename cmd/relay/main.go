@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,10 +19,11 @@ func main() {
 	metrics := flag.String("metrics", ":9090", "internal metrics/health address")
 	dbPath := flag.String("db", "relay.db", "SQLite database path")
 	limits := flag.String("limits", "none", "room limits policy: none (self-hosted default) | hosted (PROTOCOL.md §8)")
+	unlimitedOwners := flag.String("unlimited-owners", "", "comma-separated base32 user keys; rooms they currently own get tier unlimited (§8.1a)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	logger.Info("starting relay", "listen", *listen, "db", *dbPath, "limits", *limits)
+	logger.Info("starting relay", "listen", *listen, "db", *dbPath, "limits", *limits, "unlimitedOwners", countList(*unlimitedOwners))
 
 	srv := &http.Server{Addr: *listen, Handler: api.NewRouter(logger), ReadHeaderTimeout: 10 * time.Second}
 	internal := &http.Server{Addr: *metrics, Handler: api.NewInternalRouter(), ReadHeaderTimeout: 5 * time.Second}
@@ -41,4 +43,11 @@ func main() {
 	defer cancel()
 	_ = srv.Shutdown(shutdown)
 	_ = internal.Shutdown(shutdown)
+}
+
+func countList(s string) int {
+	if strings.TrimSpace(s) == "" {
+		return 0
+	}
+	return len(strings.Split(s, ","))
 }
