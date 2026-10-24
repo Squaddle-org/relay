@@ -1,5 +1,5 @@
-// Package api implements relay-api.yaml. Content-plane (ops/snapshots/push), WebSocket fanout,
-// /metrics, and limits/entitlements are still 501 stubs - B7/B8/B9.
+// Package api implements relay-api.yaml. WebSocket fanout, /metrics, and limits/entitlements are
+// still 501 stubs - B8/B9.
 package api
 
 import (
@@ -14,6 +14,7 @@ func NewRouter(log *slog.Logger, st *store.Store) http.Handler {
 	mux := http.NewServeMux()
 	replay := newReplayCache()
 	limiter := newEnvelopeRateLimiter()
+	notifier := newPushNotifier()
 	auth := func(h http.HandlerFunc) http.HandlerFunc { return requestAuth(replay, h) }
 
 	mux.HandleFunc("PUT /v1/users/{user}/devices/{device}", auth(putDevice(st)))
@@ -21,21 +22,21 @@ func NewRouter(log *slog.Logger, st *store.Store) http.Handler {
 	mux.HandleFunc("POST /v1/users/{user}/revocations", auth(postRevocation(st)))
 	mux.HandleFunc("POST /v1/rooms", auth(postRoom(st)))
 	mux.HandleFunc("GET /v1/rooms/{room}/log", auth(getLog(st)))
-	mux.HandleFunc("POST /v1/rooms/{room}/log", auth(postLog(st)))
-	mux.HandleFunc("GET /v1/rooms/{room}/ops", notImplemented)                                 // B7
-	mux.HandleFunc("POST /v1/rooms/{room}/ops", notImplemented)                                // B7
-	mux.HandleFunc("GET /v1/rooms/{room}/limits", notImplemented)                              // B9
-	mux.HandleFunc("POST /v1/entitlements", notImplemented)                                    // B9
-	mux.HandleFunc("POST /v1/billing/google/rtdn", notImplemented)                             // M5b - out of M2 scope
-	mux.HandleFunc("GET /v1/rooms/{room}/snapshots/latest", notImplemented)                    // B7
-	mux.HandleFunc("POST /v1/rooms/{room}/snapshots", notImplemented)                          // B7
+	mux.HandleFunc("POST /v1/rooms/{room}/log", auth(postLog(st, notifier)))
+	mux.HandleFunc("GET /v1/rooms/{room}/ops", auth(getOps(st)))
+	mux.HandleFunc("POST /v1/rooms/{room}/ops", auth(postOps(st, notifier)))
+	mux.HandleFunc("GET /v1/rooms/{room}/limits", notImplemented)  // B9
+	mux.HandleFunc("POST /v1/entitlements", notImplemented)        // B9
+	mux.HandleFunc("POST /v1/billing/google/rtdn", notImplemented) // M5b - out of M2 scope
+	mux.HandleFunc("GET /v1/rooms/{room}/snapshots/latest", auth(getLatestSnapshot(st)))
+	mux.HandleFunc("POST /v1/rooms/{room}/snapshots", auth(postSnapshot(st)))
 	mux.HandleFunc("GET /v1/invites/{room}/{invite}/envelope", getInviteEnvelope(st, limiter)) // unauthenticated, rate-limited
 	mux.HandleFunc("PUT /v1/invites/{room}/{invite}/envelope", auth(putInviteEnvelope(st)))
 	mux.HandleFunc("POST /v1/link/{code}", postLinkMailbox(st)) // unauthenticated, relay-api.yaml
 	mux.HandleFunc("GET /v1/link/{code}", getLinkMailbox(st))   // unauthenticated, relay-api.yaml
-	mux.HandleFunc("POST /v1/push", notImplemented)             // B7
-	mux.HandleFunc("DELETE /v1/push", notImplemented)           // B7
-	mux.HandleFunc("GET /v1/ws", notImplemented)                // B8
+	mux.HandleFunc("POST /v1/push", auth(postPushRegister(st)))
+	mux.HandleFunc("DELETE /v1/push", auth(deletePushRegister(st)))
+	mux.HandleFunc("GET /v1/ws", notImplemented) // B8
 	return logRequests(log, mux)
 }
 
