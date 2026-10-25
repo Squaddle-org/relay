@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -121,23 +122,28 @@ func (a integrationActor) buildOp(t *testing.T, room []byte, epoch, seq, lamport
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
-func authHeaderFor(devicePriv ed25519.PrivateKey, devicePub ed25519.PublicKey, method, pathAndQuery string, body []byte, at time.Time) string {
-	ts := strconv.FormatInt(at.Unix(), 10)
+func authHeaderFor(t *testing.T, devicePriv ed25519.PrivateKey, devicePub ed25519.PublicKey, method, pathAndQuery string, body []byte) string {
+	t.Helper()
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatalf("rand nonce: %v", err)
+	}
 	reqLine := method + "\n" + pathAndQuery + "\n" + ts + "\n"
-	signingInput := proto.SigningInput("req", append([]byte(reqLine), proto.Blake2b256(body)...))
+	signingInput := proto.SigningInput("req", append(append([]byte(reqLine), nonce...), proto.Blake2b256(body)...))
 	sig := ed25519.Sign(devicePriv, signingInput)
-	return fmt.Sprintf("SQDL1 device=%s, ts=%s, sig=%s", b64(devicePub), ts, b64(sig))
+	return fmt.Sprintf("SQDL1 device=%s, ts=%s, nonce=%s, sig=%s", b64(devicePub), ts, b64(nonce), b64(sig))
 }
 
 // doSigned issues a real HTTP request (over the loopback network, via httptest.Server - not
 // h.ServeHTTP) signed per PROTOCOL.md §5.
-func doSigned(t *testing.T, baseURL string, a integrationActor, method, path string, body []byte, at time.Time) *http.Response {
+func doSigned(t *testing.T, baseURL string, a integrationActor, method, path string, body []byte) *http.Response {
 	t.Helper()
 	req, err := http.NewRequest(method, baseURL+path, strings.NewReader(string(body)))
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	req.Header.Set("Authorization", authHeaderFor(a.devicePriv, a.devicePub, method, path, body, at))
+	req.Header.Set("Authorization", authHeaderFor(t, a.devicePriv, a.devicePub, method, path, body))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)
@@ -169,15 +175,6 @@ func TestTwoSimulatedClientsAgainstRealRelayHTTP(t *testing.T) {
 	server := httptest.NewServer(api.NewRouter(logger, st, policy))
 	defer server.Close()
 
-	clock := &struct {
-		base time.Time
-		n    int
-	}{base: time.Now()}
-	next := func() time.Time {
-		clock.n++
-		return clock.base.Add(time.Duration(clock.n) * time.Second)
-	}
-
 	owner := newIntegrationActor(t, 1, "Owner Phone")
 	joiner := newIntegrationActor(t, 2, "Joiner Phone")
 
@@ -188,7 +185,7 @@ func TestTwoSimulatedClientsAgainstRealRelayHTTP(t *testing.T) {
 			t.Fatalf("FullCbor: %v", err)
 		}
 		path := "/v1/users/" + b64(a.userPub) + "/devices/" + b64(a.devicePub)
-		resp := doSigned(t, server.URL, a, http.MethodPut, path, cbor, next())
+		resp := doSigned(t, server.URL, a, http.MethodPut, path, cbor)
 		if resp.StatusCode != http.StatusNoContent {
 			t.Fatalf("PUT device: got %d", resp.StatusCode)
 		}
@@ -206,7 +203,7 @@ func TestTwoSimulatedClientsAgainstRealRelayHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FullCbor: %v", err)
 	}
-	resp := doSigned(t, server.URL, owner, http.MethodPost, "/v1/rooms", genesisCbor, next())
+	resp := doSigned(t, server.URL, owner, http.MethodPost, "/v1/rooms", genesisCbor)
 	if resp.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("POST /rooms: got %d, body %s", resp.StatusCode, b)
@@ -224,7 +221,7 @@ func TestTwoSimulatedClientsAgainstRealRelayHTTP(t *testing.T) {
 		t.Fatalf("FullCbor: %v", err)
 	}
 	logPath := "/v1/rooms/" + b64(roomID) + "/log"
-	resp = doSigned(t, server.URL, owner, http.MethodPost, logPath, inviteCreateCbor, next())
+	resp = doSigned(t, server.URL, owner, http.MethodPost, logPath, inviteCreateCbor)
 	if resp.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("POST inviteCreate: got %d, body %s", resp.StatusCode, b)
@@ -237,7 +234,7 @@ func TestTwoSimulatedClientsAgainstRealRelayHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FullCbor: %v", err)
 	}
-	resp = doSigned(t, server.URL, joiner, http.MethodPost, logPath, joinCbor, next())
+	resp = doSigned(t, server.URL, joiner, http.MethodPost, logPath, joinCbor)
 	if resp.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("POST join: got %d, body %s", resp.StatusCode, b)
@@ -250,7 +247,7 @@ func TestTwoSimulatedClientsAgainstRealRelayHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FullCbor: %v", err)
 	}
-	resp = doSigned(t, server.URL, owner, http.MethodPost, logPath, approveCbor, next())
+	resp = doSigned(t, server.URL, owner, http.MethodPost, logPath, approveCbor)
 	if resp.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("POST approve: got %d, body %s", resp.StatusCode, b)
@@ -264,7 +261,7 @@ func TestTwoSimulatedClientsAgainstRealRelayHTTP(t *testing.T) {
 		t.Fatalf("encoding batch: %v", err)
 	}
 	opsPath := "/v1/rooms/" + b64(roomID) + "/ops"
-	resp = doSigned(t, server.URL, joiner, http.MethodPost, opsPath, opBatch, next())
+	resp = doSigned(t, server.URL, joiner, http.MethodPost, opsPath, opBatch)
 	if resp.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("POST ops: got %d, body %s", resp.StatusCode, b)
@@ -281,7 +278,7 @@ func TestTwoSimulatedClientsAgainstRealRelayHTTP(t *testing.T) {
 	}
 
 	// ...and the owner can read it back.
-	resp = doSigned(t, server.URL, owner, http.MethodGet, opsPath, nil, next())
+	resp = doSigned(t, server.URL, owner, http.MethodGet, opsPath, nil)
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET ops: got %d, body %s", resp.StatusCode, b)
@@ -303,7 +300,7 @@ func TestTwoSimulatedClientsAgainstRealRelayHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FullCbor: %v", err)
 	}
-	resp = doSigned(t, server.URL, joiner, http.MethodPost, logPath, badCbor, next())
+	resp = doSigned(t, server.URL, joiner, http.MethodPost, logPath, badCbor)
 	if resp.StatusCode != http.StatusForbidden {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("unauthorized transferOwner: got %d, body %s, want 403", resp.StatusCode, b)

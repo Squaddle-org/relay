@@ -66,7 +66,7 @@ func (a testActor) buildSnapshot(t *testing.T, room []byte, epoch, coversUpTo ui
 // setUpRoomWithOwnerAndMember registers both actors' devices, creates a room owned by owner,
 // and (via inviteCreate+join) makes member a room member - the shared setup every content-plane
 // test needs before it can exercise ops/snapshots/push.
-func setUpRoomWithOwnerAndMember(t *testing.T, h http.Handler, clock *testClock, owner, member testActor) (roomID []byte) {
+func setUpRoomWithOwnerAndMember(t *testing.T, h http.Handler, owner, member testActor) (roomID []byte) {
 	t.Helper()
 	for _, a := range []testActor{owner, member} {
 		cbor, err := a.cert.FullCbor()
@@ -74,7 +74,7 @@ func setUpRoomWithOwnerAndMember(t *testing.T, h http.Handler, clock *testClock,
 			t.Fatalf("FullCbor: %v", err)
 		}
 		target := fmt.Sprintf("/v1/users/%s/devices/%s", b64(a.userPub), b64(a.devicePub))
-		req, _ := signedRequest(t, a.devicePriv, a.devicePub, http.MethodPut, target, cbor, clock.next())
+		req, _ := signedRequest(t, a.devicePriv, a.devicePub, http.MethodPut, target, cbor)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusNoContent {
@@ -91,7 +91,7 @@ func setUpRoomWithOwnerAndMember(t *testing.T, h http.Handler, clock *testClock,
 		0: nonce, 1: "relay.squaddle.org", 2: make([]byte, 48),
 	})
 	genesisCbor, _ := genesis.FullCbor()
-	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, "/v1/rooms", genesisCbor, clock.next())
+	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, "/v1/rooms", genesisCbor)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -107,7 +107,7 @@ func setUpRoomWithOwnerAndMember(t *testing.T, h http.Handler, clock *testClock,
 	})
 	inviteCreateCbor, _ := inviteCreate.FullCbor()
 	logTarget := "/v1/rooms/" + b64(roomID) + "/log"
-	req2, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, logTarget, inviteCreateCbor, clock.next())
+	req2, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, logTarget, inviteCreateCbor)
 	rec2 := httptest.NewRecorder()
 	h.ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusCreated {
@@ -116,7 +116,7 @@ func setUpRoomWithOwnerAndMember(t *testing.T, h http.Handler, clock *testClock,
 
 	join := member.buildEntry(t, roomID, 2, inviteCreate.EntryHash(), proto.EntryJoin, map[uint64]any{0: inviteID})
 	joinCbor, _ := join.FullCbor()
-	req3, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodPost, logTarget, joinCbor, clock.next())
+	req3, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodPost, logTarget, joinCbor)
 	rec3 := httptest.NewRecorder()
 	h.ServeHTTP(rec3, req3)
 	if rec3.Code != http.StatusCreated {
@@ -127,10 +127,9 @@ func setUpRoomWithOwnerAndMember(t *testing.T, h http.Handler, clock *testClock,
 
 func TestOpsPostAndGetRoundTrip(t *testing.T) {
 	h, _ := newTestRouter(t)
-	clock := newTestClock()
 	owner := newTestActor(t, 10, "Owner Phone")
 	member := newTestActor(t, 11, "Member Phone")
-	roomID := setUpRoomWithOwnerAndMember(t, h, clock, owner, member)
+	roomID := setUpRoomWithOwnerAndMember(t, h, owner, member)
 
 	op := member.buildOp(t, roomID, 0, 1, 1)
 	opCbor, err := proto.EncodeCanonical([]proto.OpEnvelope{op})
@@ -138,14 +137,14 @@ func TestOpsPostAndGetRoundTrip(t *testing.T) {
 		t.Fatalf("encoding batch: %v", err)
 	}
 	opsTarget := "/v1/rooms/" + b64(roomID) + "/ops"
-	req, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodPost, opsTarget, opCbor, clock.next())
+	req, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodPost, opsTarget, opCbor)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("POST ops: got %d, body %s", rec.Code, rec.Body.String())
 	}
 
-	reqGet, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodGet, opsTarget, nil, clock.next())
+	reqGet, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodGet, opsTarget, nil)
 	recGet := httptest.NewRecorder()
 	h.ServeHTTP(recGet, reqGet)
 	if recGet.Code != http.StatusOK {
@@ -158,16 +157,15 @@ func TestOpsPostAndGetRoundTrip(t *testing.T) {
 
 func TestOpsPostRejectsWrongEpochAndNonMember(t *testing.T) {
 	h, _ := newTestRouter(t)
-	clock := newTestClock()
 	owner := newTestActor(t, 12, "Owner Phone")
 	member := newTestActor(t, 13, "Member Phone")
 	stranger := newTestActor(t, 14, "Stranger Phone")
-	roomID := setUpRoomWithOwnerAndMember(t, h, clock, owner, member)
+	roomID := setUpRoomWithOwnerAndMember(t, h, owner, member)
 	opsTarget := "/v1/rooms/" + b64(roomID) + "/ops"
 
 	wrongEpoch := member.buildOp(t, roomID, 7, 1, 1)
 	wrongEpochCbor, _ := proto.EncodeCanonical([]proto.OpEnvelope{wrongEpoch})
-	req, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodPost, opsTarget, wrongEpochCbor, clock.next())
+	req, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodPost, opsTarget, wrongEpochCbor)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
@@ -178,7 +176,7 @@ func TestOpsPostRejectsWrongEpochAndNonMember(t *testing.T) {
 	// from them must be rejected (unregistered device cert -> cannot resolve to a member).
 	strangerOp := stranger.buildOp(t, roomID, 0, 1, 1)
 	strangerCbor, _ := proto.EncodeCanonical([]proto.OpEnvelope{strangerOp})
-	req2, _ := signedRequest(t, stranger.devicePriv, stranger.devicePub, http.MethodPost, opsTarget, strangerCbor, clock.next())
+	req2, _ := signedRequest(t, stranger.devicePriv, stranger.devicePub, http.MethodPost, opsTarget, strangerCbor)
 	rec2 := httptest.NewRecorder()
 	h.ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusForbidden {
@@ -188,10 +186,9 @@ func TestOpsPostRejectsWrongEpochAndNonMember(t *testing.T) {
 
 func TestOpsPostRejectsWhileRotationPending(t *testing.T) {
 	h, _ := newTestRouter(t)
-	clock := newTestClock()
 	owner := newTestActor(t, 15, "Owner Phone")
 	member := newTestActor(t, 16, "Member Phone")
-	roomID := setUpRoomWithOwnerAndMember(t, h, clock, owner, member)
+	roomID := setUpRoomWithOwnerAndMember(t, h, owner, member)
 	logTarget := "/v1/rooms/" + b64(roomID) + "/log"
 
 	// owner removes member at index 3 (0 genesis, 1 inviteCreate, 2 join) - this sets
@@ -212,7 +209,7 @@ func TestOpsPostRejectsWhileRotationPending(t *testing.T) {
 
 	remove := owner.buildEntry(t, roomID, 3, join.EntryHash(), proto.EntryRemove, map[uint64]any{0: member.userPub})
 	removeCbor, _ := remove.FullCbor()
-	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, logTarget, removeCbor, clock.next())
+	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, logTarget, removeCbor)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -222,7 +219,7 @@ func TestOpsPostRejectsWhileRotationPending(t *testing.T) {
 	op := owner.buildOp(t, roomID, 0, 1, 1)
 	opCbor, _ := proto.EncodeCanonical([]proto.OpEnvelope{op})
 	opsTarget := "/v1/rooms/" + b64(roomID) + "/ops"
-	req2, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, opsTarget, opCbor, clock.next())
+	req2, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, opsTarget, opCbor)
 	rec2 := httptest.NewRecorder()
 	h.ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusConflict {
@@ -232,10 +229,9 @@ func TestOpsPostRejectsWhileRotationPending(t *testing.T) {
 
 func TestSnapshotPostAndGetLatest(t *testing.T) {
 	h, _ := newTestRouter(t)
-	clock := newTestClock()
 	owner := newTestActor(t, 17, "Owner Phone")
 	member := newTestActor(t, 18, "Member Phone")
-	roomID := setUpRoomWithOwnerAndMember(t, h, clock, owner, member)
+	roomID := setUpRoomWithOwnerAndMember(t, h, owner, member)
 	snapshotTarget := "/v1/rooms/" + b64(roomID) + "/snapshots"
 
 	snapshot := owner.buildSnapshot(t, roomID, 0, 42)
@@ -243,7 +239,7 @@ func TestSnapshotPostAndGetLatest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FullCbor: %v", err)
 	}
-	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, snapshotTarget, snapshotCbor, clock.next())
+	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, snapshotTarget, snapshotCbor)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -251,7 +247,7 @@ func TestSnapshotPostAndGetLatest(t *testing.T) {
 	}
 
 	latestTarget := snapshotTarget + "/latest"
-	reqGet, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodGet, latestTarget, nil, clock.next())
+	reqGet, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodGet, latestTarget, nil)
 	recGet := httptest.NewRecorder()
 	h.ServeHTTP(recGet, reqGet)
 	if recGet.Code != http.StatusOK || !bytes.Equal(recGet.Body.Bytes(), snapshotCbor) {
@@ -263,10 +259,9 @@ func TestSnapshotPostAndGetLatest(t *testing.T) {
 // (PROTOCOL.md §4.4 field numbers) instead of storing opaque bytes unchecked.
 func TestSnapshotPostRejectsBadSignature(t *testing.T) {
 	h, _ := newTestRouter(t)
-	clock := newTestClock()
 	owner := newTestActor(t, 117, "Owner Phone")
 	member := newTestActor(t, 118, "Member Phone")
-	roomID := setUpRoomWithOwnerAndMember(t, h, clock, owner, member)
+	roomID := setUpRoomWithOwnerAndMember(t, h, owner, member)
 	snapshotTarget := "/v1/rooms/" + b64(roomID) + "/snapshots"
 
 	snapshot := owner.buildSnapshot(t, roomID, 0, 1)
@@ -275,7 +270,7 @@ func TestSnapshotPostRejectsBadSignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FullCbor: %v", err)
 	}
-	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, snapshotTarget, tampered, clock.next())
+	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, snapshotTarget, tampered)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -285,14 +280,13 @@ func TestSnapshotPostRejectsBadSignature(t *testing.T) {
 
 func TestPushRegisterAndUnregister(t *testing.T) {
 	h, _ := newTestRouter(t)
-	clock := newTestClock()
 	owner := newTestActor(t, 19, "Owner Phone")
 	cbor, err := owner.cert.FullCbor()
 	if err != nil {
 		t.Fatalf("FullCbor: %v", err)
 	}
 	target := fmt.Sprintf("/v1/users/%s/devices/%s", b64(owner.userPub), b64(owner.devicePub))
-	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPut, target, cbor, clock.next())
+	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPut, target, cbor)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
@@ -300,14 +294,14 @@ func TestPushRegisterAndUnregister(t *testing.T) {
 	}
 
 	body := []byte(`{"endpoint":"https://push.example/abc"}`)
-	reqPush, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, "/v1/push", body, clock.next())
+	reqPush, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, "/v1/push", body)
 	recPush := httptest.NewRecorder()
 	h.ServeHTTP(recPush, reqPush)
 	if recPush.Code != http.StatusNoContent {
 		t.Fatalf("POST push: got %d, body %s", recPush.Code, recPush.Body.String())
 	}
 
-	reqDel, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodDelete, "/v1/push", nil, clock.next())
+	reqDel, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodDelete, "/v1/push", nil)
 	recDel := httptest.NewRecorder()
 	h.ServeHTTP(recDel, reqDel)
 	if recDel.Code != http.StatusNoContent {

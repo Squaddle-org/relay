@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -18,15 +19,21 @@ import (
 )
 
 // authHeader builds a PROTOCOL.md §5 Authorization header value for (method, path, body) at the
-// given timestamp - shared by the WS upgrade request and the plain-HTTP POST in this file, both
-// of which need to hit a *real* httptest.Server (coder/websocket needs a real listener, not
-// httptest.NewRecorder), unlike signedRequest's httptest.NewRequest used everywhere else.
-func authHeader(devicePriv ed25519.PrivateKey, devicePub ed25519.PublicKey, method, path string, body []byte, at time.Time) string {
-	ts := strconv.FormatInt(at.Unix(), 10)
+// current time with a fresh random nonce - shared by the WS upgrade request and the plain-HTTP
+// POST in this file, both of which need to hit a *real* httptest.Server (coder/websocket needs a
+// real listener, not httptest.NewRecorder), unlike signedRequest's httptest.NewRequest used
+// everywhere else.
+func authHeader(t *testing.T, devicePriv ed25519.PrivateKey, devicePub ed25519.PublicKey, method, path string, body []byte) string {
+	t.Helper()
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatalf("rand nonce: %v", err)
+	}
 	reqLine := method + "\n" + path + "\n" + ts + "\n"
-	signingInput := proto.SigningInput("req", append([]byte(reqLine), proto.Blake2b256(body)...))
+	signingInput := proto.SigningInput("req", append(append([]byte(reqLine), nonce...), proto.Blake2b256(body)...))
 	sig := ed25519.Sign(devicePriv, signingInput)
-	return fmt.Sprintf("SQDL1 device=%s, ts=%s, sig=%s", b64(devicePub), ts, b64(sig))
+	return fmt.Sprintf("SQDL1 device=%s, ts=%s, nonce=%s, sig=%s", b64(devicePub), ts, b64(nonce), b64(sig))
 }
 
 func TestWSSubscribeAndFanout(t *testing.T) {
@@ -34,13 +41,12 @@ func TestWSSubscribeAndFanout(t *testing.T) {
 	server := httptest.NewServer(h)
 	defer server.Close()
 
-	clock := newTestClock()
 	owner := newTestActor(t, 20, "Owner Phone")
 	member := newTestActor(t, 21, "Member Phone")
-	roomID := setUpRoomWithOwnerAndMember(t, h, clock, owner, member)
+	roomID := setUpRoomWithOwnerAndMember(t, h, owner, member)
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/v1/ws"
-	wsHeader := authHeader(member.devicePriv, member.devicePub, http.MethodGet, "/v1/ws", nil, clock.next())
+	wsHeader := authHeader(t, member.devicePriv, member.devicePub, http.MethodGet, "/v1/ws", nil)
 	conn, _, err := websocket.Dial(context.Background(), wsURL, &websocket.DialOptions{
 		HTTPHeader: http.Header{"Authorization": []string{wsHeader}},
 	})
@@ -81,7 +87,7 @@ func TestWSSubscribeAndFanout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	httpReq.Header.Set("Authorization", authHeader(owner.devicePriv, owner.devicePub, http.MethodPost, logPath, settingsCbor, clock.next()))
+	httpReq.Header.Set("Authorization", authHeader(t, owner.devicePriv, owner.devicePub, http.MethodPost, logPath, settingsCbor))
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		t.Fatalf("POST log: %v", err)

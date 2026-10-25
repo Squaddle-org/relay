@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -91,21 +92,23 @@ func (a testActor) buildEntry(t *testing.T, room []byte, index uint64, prev []by
 }
 
 // signedRequest builds an httptest request with a valid PROTOCOL.md §5 Authorization header,
-// signed by devicePriv/devicePub, at the given timestamp. Ed25519 signatures are deterministic
-// (same key+message always produces the same bytes), so tests that need two distinct requests
-// for the same actor/method/path/body must pass two distinct timestamps - callers that don't
-// care just pass time.Now(). Returns the header string too, so a caller testing replay rejection
-// can reuse the exact same signature on a second, independent *http.Request (the first one's
-// Body is consumed by the server and can't be resent).
-func signedRequest(t *testing.T, devicePriv ed25519.PrivateKey, devicePub ed25519.PublicKey, method, target string, body []byte, at time.Time) (*http.Request, string) {
+// signed by devicePriv/devicePub, at the current time with a fresh random nonce. Returns the
+// header string too, so a caller testing replay rejection can reuse the exact same header
+// (device+ts+nonce+sig) on a second, independent *http.Request (the first one's Body is consumed
+// by the server and can't be resent).
+func signedRequest(t *testing.T, devicePriv ed25519.PrivateKey, devicePub ed25519.PublicKey, method, target string, body []byte) (*http.Request, string) {
 	t.Helper()
 	req := httptest.NewRequest(method, target, bytes.NewReader(body))
-	ts := strconv.FormatInt(at.Unix(), 10)
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatalf("rand nonce: %v", err)
+	}
 	reqLine := method + "\n" + req.URL.RequestURI() + "\n" + ts + "\n"
-	signingInput := proto.SigningInput("req", append([]byte(reqLine), proto.Blake2b256(body)...))
+	signingInput := proto.SigningInput("req", append(append([]byte(reqLine), nonce...), proto.Blake2b256(body)...))
 	sig := ed25519.Sign(devicePriv, signingInput)
-	header := fmt.Sprintf("SQDL1 device=%s, ts=%s, sig=%s",
-		base64.RawURLEncoding.EncodeToString(devicePub), ts, base64.RawURLEncoding.EncodeToString(sig))
+	header := fmt.Sprintf("SQDL1 device=%s, ts=%s, nonce=%s, sig=%s",
+		base64.RawURLEncoding.EncodeToString(devicePub), ts, base64.RawURLEncoding.EncodeToString(nonce), base64.RawURLEncoding.EncodeToString(sig))
 	req.Header.Set("Authorization", header)
 	return req, header
 }
@@ -123,26 +126,8 @@ func newTestRouter(t *testing.T) (http.Handler, *store.Store) {
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
-// testClock hands out strictly increasing timestamps, all close to real wall-clock time (within
-// the 60s auth window requestAuth checks against). Needed because Ed25519 signatures are
-// deterministic: two otherwise-identical (key, method, target, body, ts) requests would produce
-// byte-identical signatures, which the replay cache would then (correctly) reject as a replay -
-// tests that send more than one such request need distinct timestamps to get distinct sigs.
-type testClock struct {
-	base time.Time
-	n    int
-}
-
-func newTestClock() *testClock { return &testClock{base: time.Now()} }
-
-func (c *testClock) next() time.Time {
-	c.n++
-	return c.base.Add(time.Duration(c.n) * time.Second)
-}
-
 func TestPutDeviceThenList(t *testing.T) {
 	h, _ := newTestRouter(t)
-	clock := newTestClock()
 	owner := newTestActor(t, 1, "Owner Phone")
 	certCbor, err := owner.cert.FullCbor()
 	if err != nil {
@@ -150,7 +135,7 @@ func TestPutDeviceThenList(t *testing.T) {
 	}
 
 	target := fmt.Sprintf("/v1/users/%s/devices/%s", b64(owner.userPub), b64(owner.devicePub))
-	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPut, target, certCbor, clock.next())
+	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPut, target, certCbor)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
@@ -169,7 +154,6 @@ func TestPutDeviceThenList(t *testing.T) {
 
 func TestPutDeviceRejectsWrongSignerAndReplay(t *testing.T) {
 	h, _ := newTestRouter(t)
-	clock := newTestClock()
 	owner := newTestActor(t, 2, "Owner Phone")
 	stranger := newTestActor(t, 3, "Stranger Phone")
 	certCbor, err := owner.cert.FullCbor()
@@ -179,7 +163,7 @@ func TestPutDeviceRejectsWrongSignerAndReplay(t *testing.T) {
 	target := fmt.Sprintf("/v1/users/%s/devices/%s", b64(owner.userPub), b64(owner.devicePub))
 
 	// Signed by a different device than the one being registered -> forbidden.
-	req, _ := signedRequest(t, stranger.devicePriv, stranger.devicePub, http.MethodPut, target, certCbor, clock.next())
+	req, _ := signedRequest(t, stranger.devicePriv, stranger.devicePub, http.MethodPut, target, certCbor)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
@@ -187,7 +171,7 @@ func TestPutDeviceRejectsWrongSignerAndReplay(t *testing.T) {
 	}
 
 	// Correct signer: first request succeeds...
-	req2, header := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPut, target, certCbor, clock.next())
+	req2, header := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPut, target, certCbor)
 	rec2 := httptest.NewRecorder()
 	h.ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusNoContent {
@@ -206,7 +190,6 @@ func TestPutDeviceRejectsWrongSignerAndReplay(t *testing.T) {
 
 func TestRoomLifecycleOverHTTP(t *testing.T) {
 	h, _ := newTestRouter(t)
-	clock := newTestClock()
 	owner := newTestActor(t, 4, "Owner Phone")
 
 	nonce := make([]byte, 16)
@@ -222,7 +205,7 @@ func TestRoomLifecycleOverHTTP(t *testing.T) {
 		t.Fatalf("FullCbor: %v", err)
 	}
 
-	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, "/v1/rooms", genesisCbor, clock.next())
+	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, "/v1/rooms", genesisCbor)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -230,7 +213,7 @@ func TestRoomLifecycleOverHTTP(t *testing.T) {
 	}
 
 	// Creating the same room again must 409.
-	req2, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, "/v1/rooms", genesisCbor, clock.next())
+	req2, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, "/v1/rooms", genesisCbor)
 	rec2 := httptest.NewRecorder()
 	h.ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusConflict {
@@ -244,14 +227,14 @@ func TestRoomLifecycleOverHTTP(t *testing.T) {
 		t.Fatalf("FullCbor: %v", err)
 	}
 	logTarget := "/v1/rooms/" + b64(roomID) + "/log"
-	req3, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, logTarget, settingsCbor, clock.next())
+	req3, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, logTarget, settingsCbor)
 	rec3 := httptest.NewRecorder()
 	h.ServeHTTP(rec3, req3)
 	if rec3.Code != http.StatusCreated {
 		t.Fatalf("POST log: got %d, body %s", rec3.Code, rec3.Body.String())
 	}
 
-	req4, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodGet, logTarget, nil, clock.next())
+	req4, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodGet, logTarget, nil)
 	rec4 := httptest.NewRecorder()
 	h.ServeHTTP(rec4, req4)
 	if rec4.Code != http.StatusOK {
@@ -267,7 +250,7 @@ func TestRoomLifecycleOverHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FullCbor: %v", err)
 	}
-	req5, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, logTarget, staleCbor, clock.next())
+	req5, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, logTarget, staleCbor)
 	rec5 := httptest.NewRecorder()
 	h.ServeHTTP(rec5, req5)
 	if rec5.Code != http.StatusConflict {
@@ -277,7 +260,6 @@ func TestRoomLifecycleOverHTTP(t *testing.T) {
 
 func TestInviteEnvelopeHTTPRoundTripAndAuthorization(t *testing.T) {
 	h, _ := newTestRouter(t)
-	clock := newTestClock()
 	owner := newTestActor(t, 5, "Owner Phone")
 	member := newTestActor(t, 6, "Member Phone")
 
@@ -288,7 +270,7 @@ func TestInviteEnvelopeHTTPRoundTripAndAuthorization(t *testing.T) {
 			t.Fatalf("FullCbor: %v", err)
 		}
 		target := fmt.Sprintf("/v1/users/%s/devices/%s", b64(a.userPub), b64(a.devicePub))
-		req, _ := signedRequest(t, a.devicePriv, a.devicePub, http.MethodPut, target, cbor, clock.next())
+		req, _ := signedRequest(t, a.devicePriv, a.devicePub, http.MethodPut, target, cbor)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusNoContent {
@@ -305,7 +287,7 @@ func TestInviteEnvelopeHTTPRoundTripAndAuthorization(t *testing.T) {
 		0: nonce, 1: "relay.squaddle.org", 2: make([]byte, 48),
 	})
 	genesisCbor, _ := genesis.FullCbor()
-	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, "/v1/rooms", genesisCbor, clock.next())
+	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, "/v1/rooms", genesisCbor)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -327,7 +309,7 @@ func TestInviteEnvelopeHTTPRoundTripAndAuthorization(t *testing.T) {
 		t.Fatalf("FullCbor: %v", err)
 	}
 	logTarget := "/v1/rooms/" + b64(roomID) + "/log"
-	reqInvite, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, logTarget, inviteCreateCbor, clock.next())
+	reqInvite, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, logTarget, inviteCreateCbor)
 	recInvite := httptest.NewRecorder()
 	h.ServeHTTP(recInvite, reqInvite)
 	if recInvite.Code != http.StatusCreated {
@@ -338,7 +320,7 @@ func TestInviteEnvelopeHTTPRoundTripAndAuthorization(t *testing.T) {
 	envelopeBytes := []byte("opaque-envelope-bytes")
 
 	// A non-admin member must not be able to upload an envelope.
-	reqMember, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodPut, envelopeTarget, envelopeBytes, clock.next())
+	reqMember, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodPut, envelopeTarget, envelopeBytes)
 	recMember := httptest.NewRecorder()
 	h.ServeHTTP(recMember, reqMember)
 	if recMember.Code != http.StatusForbidden {
@@ -346,7 +328,7 @@ func TestInviteEnvelopeHTTPRoundTripAndAuthorization(t *testing.T) {
 	}
 
 	// The owner can.
-	reqOwner, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPut, envelopeTarget, envelopeBytes, clock.next())
+	reqOwner, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPut, envelopeTarget, envelopeBytes)
 	recOwner := httptest.NewRecorder()
 	h.ServeHTTP(recOwner, reqOwner)
 	if recOwner.Code != http.StatusNoContent {

@@ -27,14 +27,13 @@ func newTestRouterWithPolicy(t *testing.T, policy *limits.Policy) (http.Handler,
 
 func TestGetLimitsUnlimitedBySelfHostedDefault(t *testing.T) {
 	h, st := newTestRouterWithPolicy(t, limits.NewPolicy("none", ""))
-	clock := newTestClock()
 	owner := newTestActor(t, 40, "Owner Phone")
 	member := newTestActor(t, 41, "Member Phone")
-	roomID := setUpRoomWithOwnerAndMember(t, h, clock, owner, member)
+	roomID := setUpRoomWithOwnerAndMember(t, h, owner, member)
 	_ = st
 
 	limitsTarget := "/v1/rooms/" + b64(roomID) + "/limits"
-	req, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodGet, limitsTarget, nil, clock.next())
+	req, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodGet, limitsTarget, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -51,13 +50,12 @@ func TestGetLimitsUnlimitedBySelfHostedDefault(t *testing.T) {
 
 func TestGetLimitsFreeTierWhenHosted(t *testing.T) {
 	h, _ := newTestRouterWithPolicy(t, limits.NewPolicy("hosted", ""))
-	clock := newTestClock()
 	owner := newTestActor(t, 42, "Owner Phone")
 	member := newTestActor(t, 43, "Member Phone")
-	roomID := setUpRoomWithOwnerAndMember(t, h, clock, owner, member)
+	roomID := setUpRoomWithOwnerAndMember(t, h, owner, member)
 
 	limitsTarget := "/v1/rooms/" + b64(roomID) + "/limits"
-	req, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodGet, limitsTarget, nil, clock.next())
+	req, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodGet, limitsTarget, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -74,7 +72,6 @@ func TestGetLimitsFreeTierWhenHosted(t *testing.T) {
 
 func TestJoinRejectedWithRoomFullWhenHosted(t *testing.T) {
 	h, st := newTestRouterWithPolicy(t, limits.NewPolicy("hosted", ""))
-	clock := newTestClock()
 	owner := newTestActor(t, 44, "Owner Phone")
 
 	// Register the owner's device and create the room ourselves (not via
@@ -85,7 +82,7 @@ func TestJoinRejectedWithRoomFullWhenHosted(t *testing.T) {
 		t.Fatalf("FullCbor: %v", err)
 	}
 	target := fmt.Sprintf("/v1/users/%s/devices/%s", b64(owner.userPub), b64(owner.devicePub))
-	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPut, target, cbor, clock.next())
+	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPut, target, cbor)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
@@ -99,7 +96,7 @@ func TestJoinRejectedWithRoomFullWhenHosted(t *testing.T) {
 	roomID := membership.RoomID(owner.userPub, nonce)
 	genesis := owner.buildEntry(t, roomID, 0, nil, proto.EntryGenesis, map[uint64]any{0: nonce, 1: "relay.squaddle.org", 2: make([]byte, 48)})
 	genesisCbor, _ := genesis.FullCbor()
-	req2, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, "/v1/rooms", genesisCbor, clock.next())
+	req2, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, "/v1/rooms", genesisCbor)
 	rec2 := httptest.NewRecorder()
 	h.ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusCreated {
@@ -115,7 +112,7 @@ func TestJoinRejectedWithRoomFullWhenHosted(t *testing.T) {
 	inviteCreate := owner.buildEntry(t, roomID, 1, genesis.EntryHash(), proto.EntryInviteCreate, map[uint64]any{0: inviteID, 3: false, 4: "member"})
 	inviteCreateCbor, _ := inviteCreate.FullCbor()
 	logTarget := "/v1/rooms/" + b64(roomID) + "/log"
-	req3, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, logTarget, inviteCreateCbor, clock.next())
+	req3, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, logTarget, inviteCreateCbor)
 	rec3 := httptest.NewRecorder()
 	h.ServeHTTP(rec3, req3)
 	if rec3.Code != http.StatusCreated {
@@ -128,7 +125,7 @@ func TestJoinRejectedWithRoomFullWhenHosted(t *testing.T) {
 		m := newTestActor(t, byte(100+i), "Member Phone")
 		join := m.buildEntry(t, roomID, index, prev, proto.EntryJoin, map[uint64]any{0: inviteID})
 		joinCbor, _ := join.FullCbor()
-		req, _ := signedRequest(t, m.devicePriv, m.devicePub, http.MethodPost, logTarget, joinCbor, clock.next())
+		req, _ := signedRequest(t, m.devicePriv, m.devicePub, http.MethodPost, logTarget, joinCbor)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusCreated {
@@ -147,7 +144,7 @@ func TestJoinRejectedWithRoomFullWhenHosted(t *testing.T) {
 	overflow := newTestActor(t, 200, "Overflow Phone")
 	joinOverflow := overflow.buildEntry(t, roomID, index, prev, proto.EntryJoin, map[uint64]any{0: inviteID})
 	joinOverflowCbor, _ := joinOverflow.FullCbor()
-	reqOverflow, _ := signedRequest(t, overflow.devicePriv, overflow.devicePub, http.MethodPost, logTarget, joinOverflowCbor, clock.next())
+	reqOverflow, _ := signedRequest(t, overflow.devicePriv, overflow.devicePub, http.MethodPost, logTarget, joinOverflowCbor)
 	recOverflow := httptest.NewRecorder()
 	h.ServeHTTP(recOverflow, reqOverflow)
 	if recOverflow.Code != http.StatusConflict {
@@ -164,10 +161,9 @@ func TestJoinRejectedWithRoomFullWhenHosted(t *testing.T) {
 
 func TestVoucherEntitlementRedemption(t *testing.T) {
 	h, st := newTestRouterWithPolicy(t, limits.NewPolicy("hosted", ""))
-	clock := newTestClock()
 	owner := newTestActor(t, 45, "Owner Phone")
 	member := newTestActor(t, 46, "Member Phone")
-	roomID := setUpRoomWithOwnerAndMember(t, h, clock, owner, member)
+	roomID := setUpRoomWithOwnerAndMember(t, h, owner, member)
 
 	code := "test-voucher-code-1"
 	codeHash := proto.Blake2b256([]byte(code))
@@ -176,7 +172,7 @@ func TestVoucherEntitlementRedemption(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(map[string]string{"room": b64(roomID), "provider": "voucher", "token": code})
-	req, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodPost, "/v1/entitlements", body, clock.next())
+	req, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodPost, "/v1/entitlements", body)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -191,7 +187,7 @@ func TestVoucherEntitlementRedemption(t *testing.T) {
 	}
 
 	// Redeeming the same voucher again must fail.
-	req2, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodPost, "/v1/entitlements", body, clock.next())
+	req2, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodPost, "/v1/entitlements", body)
 	rec2 := httptest.NewRecorder()
 	h.ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusBadRequest {
@@ -200,7 +196,7 @@ func TestVoucherEntitlementRedemption(t *testing.T) {
 
 	// The room's limits now reflect the boost.
 	limitsTarget := "/v1/rooms/" + b64(roomID) + "/limits"
-	req3, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodGet, limitsTarget, nil, clock.next())
+	req3, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodGet, limitsTarget, nil)
 	rec3 := httptest.NewRecorder()
 	h.ServeHTTP(rec3, req3)
 	var limitsBody map[string]any
