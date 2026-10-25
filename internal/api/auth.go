@@ -26,8 +26,8 @@ func DeviceKeyFromContext(ctx context.Context) []byte {
 	return k
 }
 
-// replayCache rejects a signature seen more than once within the auth window (PROTOCOL.md §5:
-// "replays within the window (nonce cache keyed by sig)"). Swept lazily on each check - request
+// replayCache rejects a nonce seen more than once within the auth window (PROTOCOL.md §5:
+// "replays within the window (cache keyed by nonce)"). Swept lazily on each check - request
 // volume per relay process is low enough that a full map scan per request is fine; a background
 // sweep goroutine isn't needed at this scale.
 type replayCache struct {
@@ -37,7 +37,7 @@ type replayCache struct {
 
 func newReplayCache() *replayCache { return &replayCache{seen: map[string]time.Time{}} }
 
-func (c *replayCache) checkAndRemember(sig []byte, now time.Time) bool {
+func (c *replayCache) checkAndRemember(nonce []byte, now time.Time) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for k, t := range c.seen {
@@ -45,7 +45,7 @@ func (c *replayCache) checkAndRemember(sig []byte, now time.Time) bool {
 			delete(c.seen, k)
 		}
 	}
-	key := string(sig)
+	key := string(nonce)
 	if _, exists := c.seen[key]; exists {
 		return false
 	}
@@ -64,7 +64,7 @@ func (c *replayCache) checkAndRemember(sig []byte, now time.Time) bool {
 // own, independent authorization.
 func requestAuth(replay *replayCache, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		deviceB64, ts, sigB64, ok := parseAuthHeader(r.Header.Get("Authorization"))
+		deviceB64, ts, nonceB64, sigB64, ok := parseAuthHeader(r.Header.Get("Authorization"))
 		if !ok {
 			writeError(w, http.StatusUnauthorized, "bad_signature", "missing or malformed Authorization header")
 			return
@@ -72,6 +72,11 @@ func requestAuth(replay *replayCache, next http.HandlerFunc) http.HandlerFunc {
 		device, err := base64.RawURLEncoding.DecodeString(deviceB64)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "bad_signature", "bad device key encoding")
+			return
+		}
+		nonce, err := base64.RawURLEncoding.DecodeString(nonceB64)
+		if err != nil || len(nonce) != 16 {
+			writeError(w, http.StatusUnauthorized, "bad_signature", "bad nonce encoding")
 			return
 		}
 		sig, err := base64.RawURLEncoding.DecodeString(sigB64)
@@ -99,13 +104,13 @@ func requestAuth(replay *replayCache, next http.HandlerFunc) http.HandlerFunc {
 		r.Body = io.NopCloser(strings.NewReader(string(body)))
 
 		reqLine := r.Method + "\n" + r.URL.RequestURI() + "\n" + ts + "\n"
-		signingInput := proto.SigningInput("req", append([]byte(reqLine), proto.Blake2b256(body)...))
+		signingInput := proto.SigningInput("req", append(append([]byte(reqLine), nonce...), proto.Blake2b256(body)...))
 
 		if !proto.Ed25519Verify(device, signingInput, sig) {
 			writeError(w, http.StatusUnauthorized, "bad_signature", "signature does not verify")
 			return
 		}
-		if !replay.checkAndRemember(sig, now) {
+		if !replay.checkAndRemember(nonce, now) {
 			writeError(w, http.StatusUnauthorized, "bad_signature", "replayed request")
 			return
 		}
@@ -114,27 +119,28 @@ func requestAuth(replay *replayCache, next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// parseAuthHeader parses "SQDL1 device=<b64>, ts=<unix>, sig=<b64>" (PROTOCOL.md §5).
-func parseAuthHeader(h string) (device, ts, sig string, ok bool) {
+// parseAuthHeader parses "SQDL1 device=<b64>, ts=<unix>, nonce=<b64>, sig=<b64>" (PROTOCOL.md §5).
+func parseAuthHeader(h string) (device, ts, nonce, sig string, ok bool) {
 	const prefix = "SQDL1 "
 	if !strings.HasPrefix(h, prefix) {
-		return "", "", "", false
+		return "", "", "", "", false
 	}
 	vals := map[string]string{}
 	for _, part := range strings.Split(strings.TrimPrefix(h, prefix), ",") {
 		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
 		if len(kv) != 2 {
-			return "", "", "", false
+			return "", "", "", "", false
 		}
 		vals[kv[0]] = kv[1]
 	}
 	device, ok1 := vals["device"]
 	ts, ok2 := vals["ts"]
-	sig, ok3 := vals["sig"]
-	if !ok1 || !ok2 || !ok3 {
-		return "", "", "", false
+	nonce, ok3 := vals["nonce"]
+	sig, ok4 := vals["sig"]
+	if !ok1 || !ok2 || !ok3 || !ok4 {
+		return "", "", "", "", false
 	}
-	return device, ts, sig, true
+	return device, ts, nonce, sig, true
 }
 
 func absInt64(n int64) int64 {

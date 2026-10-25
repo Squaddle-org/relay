@@ -71,11 +71,12 @@ func TestRequestAuthVectors(t *testing.T) {
 			t.Fatalf("%s: ts is not a number", name)
 		}
 		tsStr := strconv.FormatInt(int64(ts), 10)
+		nonce := vbytes(t, input, "nonce")
 		body := vbytes(t, input, "body")
 		device := vbytes(t, input, "device")
 
 		reqLine := method + "\n" + pathAndQuery + "\n" + tsStr + "\n"
-		signingInput := proto.SigningInput("req", append([]byte(reqLine), proto.Blake2b256(body)...))
+		signingInput := proto.SigningInput("req", append(append([]byte(reqLine), nonce...), proto.Blake2b256(body)...))
 		if !bytes.Equal(signingInput, vbytes(t, expected, "signingInput")) {
 			t.Errorf("%s: signingInput mismatch", name)
 		}
@@ -85,7 +86,7 @@ func TestRequestAuthVectors(t *testing.T) {
 			t.Errorf("%s: vector's sig does not verify under relay's own signingInput construction", name)
 		}
 
-		wantHeader := fmt.Sprintf("SQDL1 device=%s, ts=%s, sig=%s", base64.RawURLEncoding.EncodeToString(device), tsStr, base64.RawURLEncoding.EncodeToString(sig))
+		wantHeader := fmt.Sprintf("SQDL1 device=%s, ts=%s, nonce=%s, sig=%s", base64.RawURLEncoding.EncodeToString(device), tsStr, base64.RawURLEncoding.EncodeToString(nonce), base64.RawURLEncoding.EncodeToString(sig))
 		if wantHeader != vstr(expected, "header") {
 			t.Errorf("%s: header = %q, want %q", name, wantHeader, vstr(expected, "header"))
 		}
