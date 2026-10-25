@@ -37,3 +37,19 @@ func (s *Store) GetLatestSnapshot(roomID []byte) ([]byte, error) {
 	}
 	return snapshotCbor, nil
 }
+
+// LatestSnapshotMeta returns the covers_up_to cursor and created_at unix timestamp of roomID's
+// most recent snapshot - internal/retention needs created_at (PROTOCOL.md §4.4's "30 days after
+// a snapshot exists" floor), which GetLatestSnapshot's client-facing shape doesn't expose.
+func (s *Store) LatestSnapshotMeta(roomID []byte) (coversUpTo int64, createdAt int64, err error) {
+	err = s.db.QueryRow(
+		`SELECT covers_up_to, created_at FROM snapshots WHERE room_id = ? ORDER BY covers_up_to DESC LIMIT 1`, roomID,
+	).Scan(&coversUpTo, &createdAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, ErrSnapshotNotFound
+	}
+	if err != nil {
+		return 0, 0, fmt.Errorf("store: loading snapshot meta: %w", err)
+	}
+	return coversUpTo, createdAt, nil
+}

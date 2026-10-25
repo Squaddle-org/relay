@@ -49,3 +49,17 @@ func (s *Store) GetOpsAfter(roomID []byte, after int64, limit int) ([]StoredOp, 
 	}
 	return out, rows.Err()
 }
+
+// PruneOpsUpTo deletes ops for roomID with cursor <= upToCursor AND received_at <=
+// olderThanReceivedAt - internal/retention's combined §4.4 (covered by a snapshot)/§8.1
+// (opRetentionDays) pruning condition. Returns the number of rows deleted.
+func (s *Store) PruneOpsUpTo(roomID []byte, upToCursor, olderThanReceivedAt int64) (int64, error) {
+	res, err := s.db.Exec(
+		`DELETE FROM ops WHERE room_id = ? AND cursor <= ? AND received_at <= ?`,
+		roomID, upToCursor, olderThanReceivedAt,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("store: pruning ops: %w", err)
+	}
+	return res.RowsAffected()
+}

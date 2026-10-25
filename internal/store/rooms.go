@@ -69,6 +69,25 @@ func (s *Store) AppendLogEntry(roomID []byte, entry proto.LogEntry, rts uint64) 
 	return next, nil
 }
 
+// ListRoomIDs returns every known room id - internal/retention's periodic job walks all of them.
+func (s *Store) ListRoomIDs() ([][]byte, error) {
+	rows, err := s.db.Query(`SELECT room_id FROM rooms`)
+	if err != nil {
+		return nil, fmt.Errorf("store: listing rooms: %w", err)
+	}
+	defer rows.Close()
+
+	var out [][]byte
+	for rows.Next() {
+		var id []byte
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("store: scanning room id: %w", err)
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // GetMembershipState returns the cached (or freshly rebuilt-from-log) state for roomID.
 func (s *Store) GetMembershipState(roomID []byte) (*membership.State, error) {
 	s.mu.Lock()

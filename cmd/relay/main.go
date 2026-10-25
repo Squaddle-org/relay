@@ -13,6 +13,7 @@ import (
 
 	"github.com/squaddle-org/relay/internal/api"
 	"github.com/squaddle-org/relay/internal/limits"
+	"github.com/squaddle-org/relay/internal/retention"
 	"github.com/squaddle-org/relay/internal/store"
 )
 
@@ -46,6 +47,10 @@ func runServer() {
 	srv := &http.Server{Addr: *listen, Handler: api.NewRouter(logger, st, policy), ReadHeaderTimeout: 10 * time.Second}
 	internal := &http.Server{Addr: *metrics, Handler: api.NewInternalRouter(), ReadHeaderTimeout: 5 * time.Second}
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	retention.StartPeriodic(ctx, logger, st, policy, retention.DefaultInterval)
 	go func() { _ = internal.ListenAndServe() }()
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -54,8 +59,6 @@ func runServer() {
 		}
 	}()
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	<-ctx.Done()
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
