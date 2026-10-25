@@ -435,6 +435,15 @@ func (s *State) applyRoomSettings(entry proto.LogEntry, authorRole Role, hasAuth
 	if !hasAuthorRole || (authorRole != RoleOwner && authorRole != RoleAdmin) {
 		return nil, reject("Unauthorized")
 	}
+	// Field 1, membersCanCreateEvents (§3.3 row 11): the relay never decrypts content and never
+	// needs this value (it only matters to the content-plane materializer, which lives in core),
+	// but it still validates the field's shape when present - same spirit as every other
+	// structural check in this file.
+	if raw, exists := entry.Body[1]; exists {
+		if _, isBool := raw.(bool); !isBool {
+			return nil, invalid("roomSettings membersCanCreateEvents must be a bool")
+		}
+	}
 	return s.next(entry, s.roles, s.invites, s.epoch, s.rotationPending)
 }
 
