@@ -188,6 +188,59 @@ func TestPutDeviceRejectsWrongSignerAndReplay(t *testing.T) {
 	}
 }
 
+// TestRequestAuthDistinctNoncesInSameSecondBothSucceedButReplayIsRejected is the behavior the
+// nonce addition to PROTOCOL.md §5 exists for: Ed25519 signing is deterministic, so two requests
+// with the *same* device/method/path/ts/body used to collide into byte-identical signatures and
+// the second would be (correctly, but unhelpfully) rejected as a replay by a sig-keyed cache. With
+// a nonce in the signing input, two such requests - even stamped at the exact same unix second -
+// produce distinct signatures and both succeed; only actually replaying one of them (same nonce)
+// is rejected.
+func TestRequestAuthDistinctNoncesInSameSecondBothSucceedButReplayIsRejected(t *testing.T) {
+	h, _ := newTestRouter(t)
+	owner := newTestActor(t, 61, "Owner Phone")
+	certCbor, err := owner.cert.FullCbor()
+	if err != nil {
+		t.Fatalf("FullCbor: %v", err)
+	}
+	target := fmt.Sprintf("/v1/users/%s/devices/%s", b64(owner.userPub), b64(owner.devicePub))
+
+	ts := time.Now().Unix()
+	tsStr := strconv.FormatInt(ts, 10)
+	sign := func(nonce []byte) string {
+		reqLine := http.MethodPut + "\n" + target + "\n" + tsStr + "\n"
+		signingInput := proto.SigningInput("req", append(append([]byte(reqLine), nonce...), proto.Blake2b256(certCbor)...))
+		sig := ed25519.Sign(owner.devicePriv, signingInput)
+		return fmt.Sprintf("SQDL1 device=%s, ts=%s, nonce=%s, sig=%s", b64(owner.devicePub), tsStr, b64(nonce), b64(sig))
+	}
+	nonceA := bytes.Repeat([]byte{0xAA}, 16)
+	nonceB := bytes.Repeat([]byte{0xBB}, 16)
+
+	headerA := sign(nonceA)
+	reqA := httptest.NewRequest(http.MethodPut, target, bytes.NewReader(certCbor))
+	reqA.Header.Set("Authorization", headerA)
+	recA := httptest.NewRecorder()
+	h.ServeHTTP(recA, reqA)
+	if recA.Code != http.StatusNoContent {
+		t.Fatalf("first request: got %d, body %s", recA.Code, recA.Body.String())
+	}
+
+	reqB := httptest.NewRequest(http.MethodPut, target, bytes.NewReader(certCbor))
+	reqB.Header.Set("Authorization", sign(nonceB))
+	recB := httptest.NewRecorder()
+	h.ServeHTTP(recB, reqB)
+	if recB.Code != http.StatusNoContent {
+		t.Fatalf("second request (same ts, distinct nonce): got %d, body %s", recB.Code, recB.Body.String())
+	}
+
+	reqReplay := httptest.NewRequest(http.MethodPut, target, bytes.NewReader(certCbor))
+	reqReplay.Header.Set("Authorization", headerA)
+	recReplay := httptest.NewRecorder()
+	h.ServeHTTP(recReplay, reqReplay)
+	if recReplay.Code != http.StatusUnauthorized {
+		t.Fatalf("replay of first request's exact header: got %d, want 401", recReplay.Code)
+	}
+}
+
 func TestRoomLifecycleOverHTTP(t *testing.T) {
 	h, _ := newTestRouter(t)
 	owner := newTestActor(t, 4, "Owner Phone")
