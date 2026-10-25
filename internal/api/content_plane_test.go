@@ -38,6 +38,31 @@ func (a testActor) buildOp(t *testing.T, room []byte, epoch, seq, lamport uint64
 	return e
 }
 
+func (a testActor) buildSnapshot(t *testing.T, room []byte, epoch, coversUpTo uint64) proto.Snapshot {
+	t.Helper()
+	nonce := make([]byte, 24)
+	ct := []byte("opaque-ciphertext")
+	s := proto.Snapshot{V: 1, Room: room, Epoch: epoch, CoversUpTo: coversUpTo, Nonce: nonce, Ct: ct, Author: a.userPub, Device: a.devicePub}
+	unsigned, err := proto.EncodeCanonical(struct {
+		V          uint64 `cbor:"0,keyasint"`
+		Room       []byte `cbor:"1,keyasint"`
+		Epoch      uint64 `cbor:"2,keyasint"`
+		CoversUpTo uint64 `cbor:"3,keyasint"`
+		Nonce      []byte `cbor:"4,keyasint"`
+		Ct         []byte `cbor:"5,keyasint"`
+		Author     []byte `cbor:"6,keyasint"`
+		Device     []byte `cbor:"7,keyasint"`
+	}{s.V, s.Room, s.Epoch, s.CoversUpTo, s.Nonce, s.Ct, s.Author, s.Device})
+	if err != nil {
+		t.Fatalf("encoding unsigned snapshot: %v", err)
+	}
+	s.Sig = ed25519.Sign(a.devicePriv, proto.SigningInput(proto.SnapshotDomain, unsigned))
+	if !s.Verify() {
+		t.Fatalf("test bug: constructed snapshot does not verify")
+	}
+	return s
+}
+
 // setUpRoomWithOwnerAndMember registers both actors' devices, creates a room owned by owner,
 // and (via inviteCreate+join) makes member a room member - the shared setup every content-plane
 // test needs before it can exercise ops/snapshots/push.
@@ -213,8 +238,12 @@ func TestSnapshotPostAndGetLatest(t *testing.T) {
 	roomID := setUpRoomWithOwnerAndMember(t, h, clock, owner, member)
 	snapshotTarget := "/v1/rooms/" + b64(roomID) + "/snapshots"
 
-	blob := []byte("opaque-snapshot-bytes")
-	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, snapshotTarget, blob, clock.next())
+	snapshot := owner.buildSnapshot(t, roomID, 0, 42)
+	snapshotCbor, err := snapshot.FullCbor()
+	if err != nil {
+		t.Fatalf("FullCbor: %v", err)
+	}
+	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, snapshotTarget, snapshotCbor, clock.next())
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -225,8 +254,32 @@ func TestSnapshotPostAndGetLatest(t *testing.T) {
 	reqGet, _ := signedRequest(t, member.devicePriv, member.devicePub, http.MethodGet, latestTarget, nil, clock.next())
 	recGet := httptest.NewRecorder()
 	h.ServeHTTP(recGet, reqGet)
-	if recGet.Code != http.StatusOK || !bytes.Equal(recGet.Body.Bytes(), blob) {
+	if recGet.Code != http.StatusOK || !bytes.Equal(recGet.Body.Bytes(), snapshotCbor) {
 		t.Fatalf("GET latest snapshot: got %d %q", recGet.Code, recGet.Body.Bytes())
+	}
+}
+
+// TestSnapshotPostRejectsBadSignature confirms postSnapshot now actually validates the envelope
+// (PROTOCOL.md §4.4 field numbers) instead of storing opaque bytes unchecked.
+func TestSnapshotPostRejectsBadSignature(t *testing.T) {
+	h, _ := newTestRouter(t)
+	clock := newTestClock()
+	owner := newTestActor(t, 117, "Owner Phone")
+	member := newTestActor(t, 118, "Member Phone")
+	roomID := setUpRoomWithOwnerAndMember(t, h, clock, owner, member)
+	snapshotTarget := "/v1/rooms/" + b64(roomID) + "/snapshots"
+
+	snapshot := owner.buildSnapshot(t, roomID, 0, 1)
+	snapshot.Sig[0] ^= 0xff
+	tampered, err := snapshot.FullCbor()
+	if err != nil {
+		t.Fatalf("FullCbor: %v", err)
+	}
+	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, snapshotTarget, tampered, clock.next())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST tampered snapshot: got %d, want 400, body %s", rec.Code, rec.Body.String())
 	}
 }
 

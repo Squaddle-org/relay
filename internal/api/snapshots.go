@@ -1,10 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"io"
 	"net/http"
-	"time"
 
+	"github.com/squaddle-org/relay/internal/proto"
 	"github.com/squaddle-org/relay/internal/store"
 )
 
@@ -32,17 +33,11 @@ func getLatestSnapshot(st *store.Store) http.HandlerFunc {
 	}
 }
 
-// postSnapshot is `POST /v1/rooms/{room}/snapshots` - members only, opaque.
-//
-// KNOWN LIMITATION: PROTOCOL.md §4.4 names Snapshot's fields (room, epoch, coversUpTo, nonce, ct,
-// author, device, sig) but - unlike every other structure in the spec - never gives them CBOR
-// field numbers. Without that table this handler cannot parse the client's real `coversUpTo`
-// (needed to key retention pruning, PROTOCOL.md §4.4/§8) out of the opaque blob without guessing
-// a wire format. It stores the blob keyed by upload time instead (good enough for "latest
-// snapshot", not yet good enough for precise "ops covered by a snapshot" pruning in B9) and signs
-// nothing - the relay already can't decrypt or verify this structure's content either way. A
-// spec PR adding Snapshot's field-number table (mirroring LogEntry/DeviceCert/OpEnvelope) should
-// land before B9's retention pruning is implemented for real.
+// postSnapshot is `POST /v1/rooms/{room}/snapshots` - members only. The relay never decrypts Ct,
+// but PROTOCOL.md §4.4 now gives Snapshot's fields CBOR field numbers (same table as LogEntry/
+// DeviceCert/OpEnvelope), so the outer envelope is decoded and verified structurally exactly like
+// postOps does for OpEnvelope: signature must verify and Device must belong to Author. The real
+// CoversUpTo is then stored, keying retention pruning (internal/retention) instead of upload time.
 func postSnapshot(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		room, ok := b64PathParam(r, "room")
@@ -60,7 +55,21 @@ func postSnapshot(st *store.Store) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid", "cannot read body")
 			return
 		}
-		if err := st.PutSnapshot(room, time.Now().UnixNano(), body); err != nil {
+		snapshot, err := proto.DecodeSnapshot(body)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid", "not a canonical Snapshot")
+			return
+		}
+		if !snapshot.Verify() {
+			writeError(w, http.StatusBadRequest, "bad_signature", "snapshot signature does not verify")
+			return
+		}
+		cert, err := st.GetDeviceCert(snapshot.Device)
+		if err != nil || !bytes.Equal(cert.User, snapshot.Author) {
+			writeError(w, http.StatusForbidden, "forbidden", "device does not belong to author, or is revoked")
+			return
+		}
+		if err := st.PutSnapshot(room, int64(snapshot.CoversUpTo), body); err != nil {
 			writeError(w, http.StatusInternalServerError, "invalid", "store error")
 			return
 		}

@@ -8,8 +8,9 @@ import (
 
 var ErrSnapshotNotFound = errors.New("store: no snapshot for room")
 
-// PutSnapshot stores an opaque snapshot blob (PROTOCOL.md §4.4) - the relay never decrypts or
-// validates its contents beyond what the caller already checked (signature, room, epoch).
+// PutSnapshot stores a Snapshot envelope (PROTOCOL.md §4.4) keyed by its real coversUpTo cursor -
+// the caller (internal/api's postSnapshot) has already verified the signature and that Device
+// belongs to Author; the relay still never decrypts Ct.
 func (s *Store) PutSnapshot(roomID []byte, coversUpTo int64, snapshotCbor []byte) error {
 	_, err := s.db.Exec(
 		`INSERT INTO snapshots (room_id, covers_up_to, snapshot_cbor, created_at) VALUES (?, ?, ?, unixepoch())
