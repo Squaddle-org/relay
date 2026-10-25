@@ -32,22 +32,20 @@ type RoomLimits struct {
 	BoostedUntil     *int64
 }
 
-// KNOWN GAP: §8.1's "Defaults" paragraph only gives numbers for maxMembers/opRetentionDays/
-// attachmentBytes per tier ("free = 20 members, 90 days op retention, attachments disabled;
-// boosted = 100 members, unlimited retention, 1 GiB attachments") - it never states default
-// values for maxPending or maxActiveInvites on either tier, even though RoomLimits itself
-// defines both fields. Rather than invent numbers, both default to nil (unlimited) here, same as
-// the schema's own documented meaning for "no value" - a spec PR should add explicit defaults
-// for these two fields before a hosted relay ships for real.
-
 func Free() RoomLimits {
-	maxMembers, retention := 20, 90
-	return RoomLimits{Tier: TierFree, MaxMembers: &maxMembers, OpRetentionDays: &retention, AttachmentBytes: zeroInt()}
+	maxMembers, retention, maxPending, maxActiveInvites := 20, 90, 20, 5
+	return RoomLimits{
+		Tier: TierFree, MaxMembers: &maxMembers, OpRetentionDays: &retention,
+		AttachmentBytes: zeroInt(), MaxPending: &maxPending, MaxActiveInvites: &maxActiveInvites,
+	}
 }
 
 func Boosted(until int64) RoomLimits {
-	maxMembers, attachmentBytes := 100, 1<<30
-	return RoomLimits{Tier: TierBoosted, MaxMembers: &maxMembers, AttachmentBytes: &attachmentBytes, BoostedUntil: &until}
+	maxMembers, attachmentBytes, maxPending, maxActiveInvites := 100, 1<<30, 50, 25
+	return RoomLimits{
+		Tier: TierBoosted, MaxMembers: &maxMembers, AttachmentBytes: &attachmentBytes, BoostedUntil: &until,
+		MaxPending: &maxPending, MaxActiveInvites: &maxActiveInvites,
+	}
 }
 
 func Unlimited() RoomLimits { return RoomLimits{Tier: TierUnlimited} }
