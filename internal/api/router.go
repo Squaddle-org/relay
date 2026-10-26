@@ -10,7 +10,7 @@ import (
 	"github.com/squaddle-org/relay/internal/store"
 )
 
-func NewRouter(log *slog.Logger, st *store.Store, policy *limits.Policy) http.Handler {
+func NewRouter(log *slog.Logger, st *store.Store, policy *limits.Policy, corsAllowedOriginsCSV string) http.Handler {
 	mux := http.NewServeMux()
 	replay := newReplayCache()
 	limiter := newEnvelopeRateLimiter()
@@ -39,7 +39,10 @@ func NewRouter(log *slog.Logger, st *store.Store, policy *limits.Policy) http.Ha
 	mux.HandleFunc("POST /v1/push", auth(postPushRegister(st)))
 	mux.HandleFunc("DELETE /v1/push", auth(deletePushRegister(st)))
 	mux.HandleFunc("GET /v1/ws", auth(serveWS(st, hub)))
-	return logRequests(log, metricsMiddleware(mux))
+	// CORS outermost: an OPTIONS preflight to an unauthenticated route (e.g. the invite envelope
+	// GET) must never reach requestAuth, and method-specific mux patterns never match OPTIONS at
+	// all, so this has to sit in front of everything else.
+	return corsMiddleware(parseCommaList(corsAllowedOriginsCSV), logRequests(log, metricsMiddleware(mux)))
 }
 
 func NewInternalRouter() http.Handler {

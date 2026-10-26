@@ -31,6 +31,7 @@ func runServer() {
 	dbPath := flag.String("db", "relay.db", "SQLite database path")
 	limitsMode := flag.String("limits", "none", "room limits policy: none (self-hosted default) | hosted (PROTOCOL.md §8)")
 	unlimitedOwners := flag.String("unlimited-owners", "", "comma-separated base32 user keys; rooms they currently own get tier unlimited (§8.1a)")
+	corsOrigins := flag.String("cors-allowed-origins", "", "comma-separated allowed CORS origins for browser clients (empty = no CORS headers sent)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -44,7 +45,7 @@ func runServer() {
 	}
 	defer st.Close()
 
-	srv := &http.Server{Addr: *listen, Handler: api.NewRouter(logger, st, policy), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: *listen, Handler: api.NewRouter(logger, st, policy, *corsOrigins), ReadHeaderTimeout: 10 * time.Second}
 	internal := &http.Server{Addr: *metrics, Handler: api.NewInternalRouter(), ReadHeaderTimeout: 5 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
