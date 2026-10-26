@@ -172,7 +172,7 @@ func TestTwoSimulatedClientsAgainstRealRelayHTTP(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	policy := limits.NewPolicy("none", "")
-	server := httptest.NewServer(api.NewRouter(logger, st, policy))
+	server := httptest.NewServer(api.NewRouter(logger, st, policy, ""))
 	defer server.Close()
 
 	owner := newIntegrationActor(t, 1, "Owner Phone")

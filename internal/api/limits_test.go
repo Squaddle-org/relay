@@ -22,7 +22,7 @@ func newTestRouterWithPolicy(t *testing.T, policy *limits.Policy) (http.Handler,
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	return NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), st, policy), st
+	return NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), st, policy, ""), st
 }
 
 func TestGetLimitsUnlimitedBySelfHostedDefault(t *testing.T) {
