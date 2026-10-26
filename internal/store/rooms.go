@@ -69,6 +69,47 @@ func (s *Store) AppendLogEntry(roomID []byte, entry proto.LogEntry, rts uint64) 
 	return next, nil
 }
 
+// RoomForUser is one row of RoomsForUser's result.
+type RoomForUser struct {
+	RoomID    []byte
+	RelayHost string
+}
+
+// RoomsForUser returns every room on this relay where user currently holds an active role (not
+// pending) - for `GET /users/{user}/rooms`. The members table is already a materialized index of
+// exactly this, and a removed/kicked user's row is already absent from it (persistAccepted's
+// delete+reinsert-every-append pattern).
+func (s *Store) RoomsForUser(user []byte) ([]RoomForUser, error) {
+	rows, err := s.db.Query(
+		`SELECT rooms.room_id, rooms.relay_host FROM members
+		 JOIN rooms ON rooms.room_id = members.room_id
+		 WHERE members.user_key = ? AND members.role != 'pending'`,
+		user,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: listing rooms for user: %w", err)
+	}
+	defer rows.Close()
+
+	var out []RoomForUser
+	for rows.Next() {
+		var r RoomForUser
+		if err := rows.Scan(&r.RoomID, &r.RelayHost); err != nil {
+			return nil, fmt.Errorf("store: scanning room for user: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// genesisRelayHost extracts the genesis body's field 1 (PROTOCOL.md §3.3 row 0, `relayHost`).
+// The relay stays content-blind/lenient about this field, same posture as every other body-field
+// check in this codebase (cf. applyRoomSettings) - absent or wrong type just means "" stored.
+func genesisRelayHost(entry proto.LogEntry) string {
+	host, _ := entry.Body[1].(string)
+	return host
+}
+
 // ListRoomIDs returns every known room id - internal/retention's periodic job walks all of them.
 func (s *Store) ListRoomIDs() ([][]byte, error) {
 	rows, err := s.db.Query(`SELECT room_id FROM rooms`)
@@ -177,8 +218,8 @@ func (s *Store) persistAccepted(entry proto.LogEntry, rts uint64, next *membersh
 	}
 	if entry.Index == 0 {
 		if _, err := tx.Exec(
-			`INSERT INTO rooms (room_id, head_hash, next_index, epoch, rotation_pending, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-			next.RoomID(), next.HeadHash(), next.NextIndex(), next.Epoch(), rotationPending, time.Now().Unix(),
+			`INSERT INTO rooms (room_id, head_hash, next_index, epoch, rotation_pending, relay_host, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			next.RoomID(), next.HeadHash(), next.NextIndex(), next.Epoch(), rotationPending, genesisRelayHost(entry), time.Now().Unix(),
 		); err != nil {
 			return fmt.Errorf("store: inserting room: %w", err)
 		}

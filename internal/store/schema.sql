@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS rooms (
   next_index       INTEGER NOT NULL,
   epoch            INTEGER NOT NULL,
   rotation_pending INTEGER NOT NULL DEFAULT 0, -- ADR-0012 (PROTOCOL.md §3.4)
+  relay_host       TEXT NOT NULL DEFAULT '',   -- from genesis body field 1 (PROTOCOL.md §3.3 row 0)
   created_at       INTEGER NOT NULL
 );
 

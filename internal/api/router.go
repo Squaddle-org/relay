@@ -21,6 +21,7 @@ func NewRouter(log *slog.Logger, st *store.Store, policy *limits.Policy) http.Ha
 	mux.HandleFunc("PUT /v1/users/{user}/devices/{device}", auth(putDevice(st)))
 	mux.HandleFunc("GET /v1/users/{user}/devices", listDevices(st)) // unauthenticated, relay-api.yaml
 	mux.HandleFunc("POST /v1/users/{user}/revocations", auth(postRevocation(st)))
+	mux.HandleFunc("GET /v1/users/{user}/rooms", auth(getUserRooms(st)))
 	mux.HandleFunc("POST /v1/rooms", auth(postRoom(st)))
 	mux.HandleFunc("GET /v1/rooms/{room}/log", auth(getLog(st)))
 	mux.HandleFunc("POST /v1/rooms/{room}/log", auth(postLog(st, notifier, hub, policy)))

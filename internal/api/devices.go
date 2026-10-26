@@ -2,6 +2,8 @@ package api
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net/http"
 
@@ -129,5 +131,43 @@ func postRevocation(st *store.Store) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+type userRoomItem struct {
+	RoomID    string `json:"roomId"`
+	RelayHost string `json:"relayHost"`
+}
+
+// getUserRooms is `GET /v1/users/{user}/rooms` - self-only (caller's own device must belong to
+// {user}, mirroring invites.go's callerIsOwnerOrAdmin pattern but checking identity rather than
+// role), for seed-restore room recovery (PROTOCOL.md §5, spec v1.0.0-draft.3).
+func getUserRooms(st *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pathUser, ok := b64PathParam(r, "user")
+		if !ok {
+			writeError(w, http.StatusBadRequest, "invalid", "bad user path parameter")
+			return
+		}
+		device := DeviceKeyFromContext(r.Context())
+		cert, err := st.GetDeviceCert(device)
+		if err != nil || !bytes.Equal(cert.User, pathUser) {
+			writeError(w, http.StatusForbidden, "forbidden", "caller's device does not belong to this user")
+			return
+		}
+		rooms, err := st.RoomsForUser(pathUser)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "invalid", "store error")
+			return
+		}
+		items := make([]userRoomItem, 0, len(rooms))
+		for _, rm := range rooms {
+			items = append(items, userRoomItem{
+				RoomID:    base64.RawURLEncoding.EncodeToString(rm.RoomID),
+				RelayHost: rm.RelayHost,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(items)
 	}
 }
