@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -393,6 +394,69 @@ func TestInviteEnvelopeHTTPRoundTripAndAuthorization(t *testing.T) {
 	h.ServeHTTP(recGet, httptest.NewRequest(http.MethodGet, envelopeTarget, nil))
 	if recGet.Code != http.StatusOK || !bytes.Equal(recGet.Body.Bytes(), envelopeBytes) {
 		t.Fatalf("GET envelope: got %d %q, want 200 %q", recGet.Code, recGet.Body.Bytes(), envelopeBytes)
+	}
+}
+
+func TestGetUserRoomsReturnsActiveRoomsWithRelayHostAndRejectsOtherUsers(t *testing.T) {
+	h, _ := newTestRouter(t)
+	owner := newTestActor(t, 80, "Owner Phone")
+	stranger := newTestActor(t, 82, "Stranger Phone")
+
+	for _, a := range []testActor{owner, stranger} {
+		cbor, err := a.cert.FullCbor()
+		if err != nil {
+			t.Fatalf("FullCbor: %v", err)
+		}
+		target := fmt.Sprintf("/v1/users/%s/devices/%s", b64(a.userPub), b64(a.devicePub))
+		req, _ := signedRequest(t, a.devicePriv, a.devicePub, http.MethodPut, target, cbor)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("PUT device: got %d", rec.Code)
+		}
+	}
+
+	nonce := make([]byte, 16)
+	for i := range nonce {
+		nonce[i] = byte(i + 90)
+	}
+	roomID := membership.RoomID(owner.userPub, nonce)
+	genesis := owner.buildEntry(t, roomID, 0, nil, proto.EntryGenesis, map[uint64]any{
+		0: nonce, 1: "relay.squaddle.org", 2: make([]byte, 48),
+	})
+	genesisCbor, err := genesis.FullCbor()
+	if err != nil {
+		t.Fatalf("FullCbor: %v", err)
+	}
+	req, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPost, "/v1/rooms", genesisCbor)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /rooms: got %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	// The owner can list their own rooms, and gets back the relayHost recorded at genesis.
+	target := "/v1/users/" + b64(owner.userPub) + "/rooms"
+	reqOwner, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodGet, target, nil)
+	recOwner := httptest.NewRecorder()
+	h.ServeHTTP(recOwner, reqOwner)
+	if recOwner.Code != http.StatusOK {
+		t.Fatalf("GET rooms: got %d, body %s", recOwner.Code, recOwner.Body.String())
+	}
+	var items []userRoomItem
+	if err := json.Unmarshal(recOwner.Body.Bytes(), &items); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(items) != 1 || items[0].RoomID != b64(roomID) || items[0].RelayHost != "relay.squaddle.org" {
+		t.Fatalf("got %+v, want one room %s with relayHost relay.squaddle.org", items, b64(roomID))
+	}
+
+	// A device signing as a different user than the path param must be rejected.
+	reqStranger, _ := signedRequest(t, stranger.devicePriv, stranger.devicePub, http.MethodGet, target, nil)
+	recStranger := httptest.NewRecorder()
+	h.ServeHTTP(recStranger, reqStranger)
+	if recStranger.Code != http.StatusForbidden {
+		t.Fatalf("stranger GET owner's rooms: got %d, want 403", recStranger.Code)
 	}
 }
 
