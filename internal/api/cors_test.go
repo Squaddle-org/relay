@@ -11,7 +11,7 @@ import (
 	"github.com/squaddle-org/relay/internal/store"
 )
 
-const testAllowedOrigin = "https://app.squaddle.org"
+const testAllowedOrigin = "https://client.squaddle.org"
 
 func newTestRouterWithCORS(t *testing.T, allowedOriginsCSV string) http.Handler {
 	t.Helper()
