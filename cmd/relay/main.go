@@ -100,16 +100,20 @@ func runServer() {
 // (schema.sql) - the plaintext code is generated here and printed exactly once; the operator is
 // responsible for handing it to whoever redeems it via `POST /entitlements`.
 func runVoucherCLI(args []string) {
+	// "mint" must be checked and stripped *before* flag.Parse, not handled via fs.Arg(0) after
+	// - flag.Parse stops at the first non-flag argument, and "mint" (positional, first) would
+	// otherwise make it stop immediately, silently never parsing -tier/-duration-days/-db at all
+	// (they'd all silently keep their defaults regardless of what's actually passed - found via
+	// a real file ending up written to the default ./relay.db instead of an explicit -db path).
+	if len(args) < 1 || args[0] != "mint" {
+		fmt.Fprintln(os.Stderr, "usage: relay voucher mint -tier=boosted|unlimited [-duration-days=30] [-db=relay.db]")
+		os.Exit(2)
+	}
 	fs := flag.NewFlagSet("voucher", flag.ExitOnError)
 	dbPath := fs.String("db", "relay.db", "SQLite database path")
 	tier := fs.String("tier", "boosted", "voucher tier: boosted | unlimited")
 	durationDays := fs.Int("duration-days", 30, "boost duration in days (ignored for -tier=unlimited, which is always permanent, §8.1a)")
-	_ = fs.Parse(args)
-
-	if fs.NArg() < 1 || fs.Arg(0) != "mint" {
-		fmt.Fprintln(os.Stderr, "usage: relay voucher mint -tier=boosted|unlimited [-duration-days=30] [-db=relay.db]")
-		os.Exit(2)
-	}
+	_ = fs.Parse(args[1:])
 	if *tier != "boosted" && *tier != "unlimited" {
 		fmt.Fprintln(os.Stderr, "tier must be \"boosted\" or \"unlimited\"")
 		os.Exit(2)
