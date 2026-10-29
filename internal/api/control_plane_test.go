@@ -122,7 +122,7 @@ func newTestRouter(t *testing.T) (http.Handler, *store.Store) {
 	}
 	t.Cleanup(func() { st.Close() })
 	policy := limits.NewPolicy("none", "") // unlimited, same as every test assumed before limits existed
-	return NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), st, policy, ""), st
+	return NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), st, policy, "", nil), st
 }
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }

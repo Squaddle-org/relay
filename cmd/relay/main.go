@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"github.com/squaddle-org/relay/internal/limits"
 	"github.com/squaddle-org/relay/internal/retention"
 	"github.com/squaddle-org/relay/internal/store"
+	"github.com/squaddle-org/relay/internal/webpush"
 )
 
 func main() {
@@ -22,7 +24,31 @@ func main() {
 		runVoucherCLI(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "vapid" {
+		runVapidCLI(os.Args[2:])
+		return
+	}
 	runServer()
+}
+
+// loadVapidKey is ADR-0013: `-vapid-private-key-file` unset is a supported, permissive default
+// (push just stays disabled) - only a *given but unreadable/invalid* file fails fast, since that
+// means the operator tried to configure push and got it wrong.
+func loadVapidKey(path string) *ecdsa.PrivateKey {
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "reading -vapid-private-key-file:", err)
+		os.Exit(1)
+	}
+	key, err := webpush.DecodePrivateKeyPEM(data)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "parsing -vapid-private-key-file:", err)
+		os.Exit(1)
+	}
+	return key
 }
 
 func runServer() {
@@ -32,11 +58,13 @@ func runServer() {
 	limitsMode := flag.String("limits", "none", "room limits policy: none (self-hosted default) | hosted (PROTOCOL.md §8)")
 	unlimitedOwners := flag.String("unlimited-owners", "", "comma-separated base32 user keys; rooms they currently own get tier unlimited (§8.1a)")
 	corsOrigins := flag.String("cors-allowed-origins", "", "comma-separated allowed CORS origins for browser clients (empty = no CORS headers sent)")
+	vapidKeyFile := flag.String("vapid-private-key-file", "", "PEM-encoded P-256 EC private key for VAPID-authenticated Web Push (ADR-0013); empty = push disabled")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	policy := limits.NewPolicy(*limitsMode, *unlimitedOwners)
-	logger.Info("starting relay", "listen", *listen, "db", *dbPath, "limits", *limitsMode, "unlimitedOwnersHosted", policy.Hosted)
+	vapidKey := loadVapidKey(*vapidKeyFile)
+	logger.Info("starting relay", "listen", *listen, "db", *dbPath, "limits", *limitsMode, "unlimitedOwnersHosted", policy.Hosted, "pushEnabled", vapidKey != nil)
 
 	st, err := store.Open(*dbPath)
 	if err != nil {
@@ -45,7 +73,7 @@ func runServer() {
 	}
 	defer st.Close()
 
-	srv := &http.Server{Addr: *listen, Handler: api.NewRouter(logger, st, policy, *corsOrigins), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: *listen, Handler: api.NewRouter(logger, st, policy, *corsOrigins, vapidKey), ReadHeaderTimeout: 10 * time.Second}
 	internal := &http.Server{Addr: *metrics, Handler: api.NewInternalRouter(), ReadHeaderTimeout: 5 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

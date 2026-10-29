@@ -21,7 +21,7 @@ func newTestRouterWithCORS(t *testing.T, allowedOriginsCSV string) http.Handler 
 	}
 	t.Cleanup(func() { st.Close() })
 	policy := limits.NewPolicy("none", "")
-	return NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), st, policy, allowedOriginsCSV)
+	return NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), st, policy, allowedOriginsCSV, nil)
 }
 
 func TestCORSPreflightOnAuthenticatedRouteNeedsNoAuthorizationHeader(t *testing.T) {

@@ -2,6 +2,7 @@
 package api
 
 import (
+	"crypto/ecdsa"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -10,11 +11,14 @@ import (
 	"github.com/squaddle-org/relay/internal/store"
 )
 
-func NewRouter(log *slog.Logger, st *store.Store, policy *limits.Policy, corsAllowedOriginsCSV string) http.Handler {
+// vapidKey may be nil - push is then silently disabled (pushNotifier.notify no-ops, GET
+// /v1/push/vapid 404s) rather than the relay refusing to start; plenty of self-hosted relays
+// won't care about push at all (ADR-0013).
+func NewRouter(log *slog.Logger, st *store.Store, policy *limits.Policy, corsAllowedOriginsCSV string, vapidKey *ecdsa.PrivateKey) http.Handler {
 	mux := http.NewServeMux()
 	replay := newReplayCache()
 	limiter := newEnvelopeRateLimiter()
-	notifier := newPushNotifier()
+	notifier := newPushNotifier(vapidKey)
 	hub := newWsHub()
 	auth := func(h http.HandlerFunc) http.HandlerFunc { return requestAuth(replay, h) }
 
@@ -36,6 +40,7 @@ func NewRouter(log *slog.Logger, st *store.Store, policy *limits.Policy, corsAll
 	mux.HandleFunc("PUT /v1/invites/{room}/{invite}/envelope", auth(putInviteEnvelope(st)))
 	mux.HandleFunc("POST /v1/link/{code}", postLinkMailbox(st)) // unauthenticated, relay-api.yaml
 	mux.HandleFunc("GET /v1/link/{code}", getLinkMailbox(st))   // unauthenticated, relay-api.yaml
+	mux.HandleFunc("GET /v1/push/vapid", getVapidPublicKey(notifier.vapidPub)) // unauthenticated, relay-api.yaml, ADR-0013
 	mux.HandleFunc("POST /v1/push", auth(postPushRegister(st)))
 	mux.HandleFunc("DELETE /v1/push", auth(deletePushRegister(st)))
 	mux.HandleFunc("GET /v1/ws", auth(serveWS(st, hub)))
