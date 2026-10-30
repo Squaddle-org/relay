@@ -18,6 +18,7 @@ func NewRouter(log *slog.Logger, st *store.Store, policy *limits.Policy, corsAll
 	mux := http.NewServeMux()
 	replay := newReplayCache()
 	limiter := newEnvelopeRateLimiter()
+	linkLimiter := newEnvelopeRateLimiter() // separate budget - link-mailbox traffic shouldn't eat into the invite-envelope lookup budget, or vice versa
 	notifier := newPushNotifier(vapidKey)
 	hub := newWsHub()
 	auth := func(h http.HandlerFunc) http.HandlerFunc { return requestAuth(replay, h) }
@@ -38,8 +39,8 @@ func NewRouter(log *slog.Logger, st *store.Store, policy *limits.Policy, corsAll
 	mux.HandleFunc("POST /v1/rooms/{room}/snapshots", auth(postSnapshot(st)))
 	mux.HandleFunc("GET /v1/invites/{room}/{invite}/envelope", getInviteEnvelope(st, limiter)) // unauthenticated, rate-limited
 	mux.HandleFunc("PUT /v1/invites/{room}/{invite}/envelope", auth(putInviteEnvelope(st)))
-	mux.HandleFunc("POST /v1/link/{code}", postLinkMailbox(st)) // unauthenticated, relay-api.yaml
-	mux.HandleFunc("GET /v1/link/{code}", getLinkMailbox(st))   // unauthenticated, relay-api.yaml
+	mux.HandleFunc("POST /v1/link/{code}", postLinkMailbox(st, linkLimiter)) // unauthenticated, relay-api.yaml, rate-limited
+	mux.HandleFunc("GET /v1/link/{code}", getLinkMailbox(st, linkLimiter))   // unauthenticated, relay-api.yaml, rate-limited
 	mux.HandleFunc("GET /v1/push/vapid", getVapidPublicKey(notifier.vapidPub)) // unauthenticated, relay-api.yaml, ADR-0013
 	mux.HandleFunc("POST /v1/push", auth(postPushRegister(st)))
 	mux.HandleFunc("DELETE /v1/push", auth(deletePushRegister(st)))
