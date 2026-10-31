@@ -59,9 +59,15 @@ func runServer() {
 	unlimitedOwners := flag.String("unlimited-owners", "", "comma-separated base32 user keys; rooms they currently own get tier unlimited (§8.1a)")
 	corsOrigins := flag.String("cors-allowed-origins", "", "comma-separated allowed CORS origins for browser clients (empty = no CORS headers sent)")
 	vapidKeyFile := flag.String("vapid-private-key-file", "", "PEM-encoded P-256 EC private key for VAPID-authenticated Web Push (ADR-0013); empty = push disabled")
+	logLevel := flag.String("log-level", "info", "minimum log level: debug | info | warn | error - debug includes logRequests' own per-request method+pattern line (router.go)")
 	flag.Parse()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(*logLevel)); err != nil {
+		fmt.Fprintln(os.Stderr, "parsing -log-level:", err)
+		os.Exit(1)
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	policy := limits.NewPolicy(*limitsMode, *unlimitedOwners)
 	vapidKey := loadVapidKey(*vapidKeyFile)
 	logger.Info("starting relay", "listen", *listen, "db", *dbPath, "limits", *limitsMode, "unlimitedOwnersHosted", policy.Hosted, "pushEnabled", vapidKey != nil)

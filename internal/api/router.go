@@ -73,10 +73,24 @@ func notImplemented(w http.ResponseWriter, _ *http.Request) {
 	writeError(w, http.StatusNotImplemented, "invalid", "not implemented yet")
 }
 
-// logRequests never logs bodies, auth headers or query strings (may contain ids worth protecting).
+// statusCapturingWriter records the status code a handler actually wrote, for logRequests'
+// own benefit - http.ResponseWriter has no getter for it otherwise.
+type statusCapturingWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusCapturingWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+// logRequests never logs bodies, auth headers or query strings (may contain ids worth protecting) -
+// method, path pattern (not the raw path - no ids), and the response status are not sensitive.
 func logRequests(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Debug("request", "method", r.Method, "pattern", r.Pattern)
-		next.ServeHTTP(w, r)
+		sw := &statusCapturingWriter{ResponseWriter: w, status: http.StatusOK} // default if the handler never calls WriteHeader explicitly (e.g. a 200 via Write alone)
+		next.ServeHTTP(sw, r)
+		log.Debug("request", "method", r.Method, "pattern", r.Pattern, "status", sw.status)
 	})
 }
