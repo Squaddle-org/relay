@@ -117,6 +117,18 @@ func TestWSOriginCheckMatchesCORSAllowedOrigins(t *testing.T) {
 	defer server.Close()
 
 	owner := newTestActor(t, 30, "Owner Phone")
+	certCbor, err := owner.cert.FullCbor()
+	if err != nil {
+		t.Fatalf("FullCbor: %v", err)
+	}
+	deviceTarget := fmt.Sprintf("/v1/users/%s/devices/%s", b64(owner.userPub), b64(owner.devicePub))
+	deviceReq, _ := signedRequest(t, owner.devicePriv, owner.devicePub, http.MethodPut, deviceTarget, certCbor)
+	deviceRec := httptest.NewRecorder()
+	h.ServeHTTP(deviceRec, deviceReq)
+	if deviceRec.Code != http.StatusNoContent {
+		t.Fatalf("PUT device: got %d", deviceRec.Code)
+	}
+
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/v1/ws"
 	wsHeader := authHeader(t, owner.devicePriv, owner.devicePub, http.MethodGet, "/v1/ws", nil)
 

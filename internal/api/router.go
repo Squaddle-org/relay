@@ -42,8 +42,8 @@ func NewRouter(log *slog.Logger, st *store.Store, policy *limits.Policy, corsAll
 	mux.HandleFunc("POST /v1/rooms/{room}/snapshots", auth(postSnapshot(st)))
 	mux.HandleFunc("GET /v1/invites/{room}/{invite}/envelope", getInviteEnvelope(st, limiter)) // unauthenticated, rate-limited
 	mux.HandleFunc("PUT /v1/invites/{room}/{invite}/envelope", auth(putInviteEnvelope(st)))
-	mux.HandleFunc("POST /v1/link/{code}", postLinkMailbox(st, linkLimiter)) // unauthenticated, relay-api.yaml, rate-limited
-	mux.HandleFunc("GET /v1/link/{code}", getLinkMailbox(st, linkLimiter))   // unauthenticated, relay-api.yaml, rate-limited
+	mux.HandleFunc("POST /v1/link/{code}", postLinkMailbox(st, linkLimiter))   // unauthenticated, relay-api.yaml, rate-limited
+	mux.HandleFunc("GET /v1/link/{code}", getLinkMailbox(st, linkLimiter))     // unauthenticated, relay-api.yaml, rate-limited
 	mux.HandleFunc("GET /v1/push/vapid", getVapidPublicKey(notifier.vapidPub)) // unauthenticated, relay-api.yaml, ADR-0013
 	mux.HandleFunc("POST /v1/push", auth(postPushRegister(st)))
 	mux.HandleFunc("DELETE /v1/push", auth(deletePushRegister(st)))
@@ -78,10 +78,20 @@ func notImplemented(w http.ResponseWriter, _ *http.Request) {
 
 // statusCapturingWriter records the status code a handler actually wrote, for logRequests'
 // own benefit - http.ResponseWriter has no getter for it otherwise.
+//
+// Unwrap is required, not optional: coder/websocket's Accept goes through http.NewResponseController
+// to reach the underlying http.Hijacker, which only looks past a wrapper that implements Unwrap()
+// http.ResponseWriter (net/http's ResponseController convention). Without it, every WS upgrade -
+// not just cross-origin ones - silently broke: Accept couldn't hijack the raw connection, so the
+// client ended up reading a plain HTTP response as if it were WS frames ("received header with
+// unexpected rsv bits set"). Found live via the new WS-origin test above going from a 403 to this
+// once device registration was fixed - this bug predates and is independent of OriginPatterns.
 type statusCapturingWriter struct {
 	http.ResponseWriter
 	status int
 }
+
+func (w *statusCapturingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (w *statusCapturingWriter) WriteHeader(status int) {
 	w.status = status

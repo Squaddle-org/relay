@@ -1,9 +1,6 @@
 package api
 
 import (
-	"bufio"
-	"fmt"
-	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -38,18 +35,16 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
-// Hijack delegates to the underlying ResponseWriter's http.Hijacker, if it has one. Without
-// this, wrapping a ResponseWriter in a struct that only embeds the http.ResponseWriter
-// *interface* silently drops Hijacker support (embedding an interface only promotes that
-// interface's own methods, not ones satisfied by the concrete value underneath) - which broke
-// GET /v1/ws: websocket.Accept requires Hijacker and fails closed with 501 otherwise.
-func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	hj, ok := s.ResponseWriter.(http.Hijacker)
-	if !ok {
-		return nil, nil, fmt.Errorf("underlying ResponseWriter does not implement http.Hijacker")
-	}
-	return hj.Hijack()
-}
+// Unwrap - not a direct Hijack passthrough - is what's required here. coder/websocket's own
+// hijacker() helper (see its doc comment) walks a chain of Unwrap() methods looking for the
+// first concrete http.Hijacker; a *direct* type-assertion Hijack() method on statusRecorder
+// (the previous shape of this method) stops that walk early and fails the instant anything else
+// sits between statusRecorder and the real ResponseWriter - which is exactly what logRequests'
+// statusCapturingWriter (router.go) does today. Found live: GET /v1/ws's 101 response headers
+// went out fine (written before the failed hijack attempt), then the hijack itself failed and
+// the connection was left in a broken half-upgraded state - the client saw what looked like a
+// successful handshake but then got garbage instead of WS frames.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 func metricsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
