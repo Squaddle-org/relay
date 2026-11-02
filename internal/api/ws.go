@@ -92,7 +92,14 @@ func (h *wsHub) broadcast(roomID []byte, cursor int64, kind string) {
 // against the caller's *current* membership (§5: "member/admin/owner, not pending, not
 // removed") - unknown rooms or rooms the caller isn't an active member of are silently skipped,
 // not an error, since a client might legitimately race a `join` against opening the socket.
-func serveWS(st *store.Store, hub *wsHub) http.HandlerFunc {
+// allowedOrigins is the same list corsMiddleware already uses (router.go) - coder/websocket's
+// own Accept does its own origin check entirely separately from the surrounding HTTP CORS
+// middleware (confirmed directly: "Accept will not allow cross origin requests by default," and
+// with no OriginPatterns set, "the request host is always authorized" - nothing else). A browser
+// client on a different origin (webclient) got its ordinary HTTP calls correctly CORS-enabled by
+// corsMiddleware but still had its WebSocket connections rejected here, found live - these are
+// two unrelated checks, both needed.
+func serveWS(st *store.Store, hub *wsHub, allowedOrigins []string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		device := DeviceKeyFromContext(r.Context())
 		cert, err := st.GetDeviceCert(device)
@@ -101,7 +108,7 @@ func serveWS(st *store.Store, hub *wsHub) http.HandlerFunc {
 			return
 		}
 
-		conn, err := websocket.Accept(w, r, nil)
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: allowedOrigins})
 		if err != nil {
 			return
 		}

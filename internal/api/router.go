@@ -22,6 +22,9 @@ func NewRouter(log *slog.Logger, st *store.Store, policy *limits.Policy, corsAll
 	notifier := newPushNotifier(vapidKey)
 	hub := newWsHub()
 	auth := func(h http.HandlerFunc) http.HandlerFunc { return requestAuth(replay, h) }
+	// Parsed once, shared with serveWS below - see serveWS's own doc comment for why it needs
+	// this same list separately from corsMiddleware's use of it further down.
+	allowedOrigins := parseCommaList(corsAllowedOriginsCSV)
 
 	mux.HandleFunc("PUT /v1/users/{user}/devices/{device}", auth(putDevice(st)))
 	mux.HandleFunc("GET /v1/users/{user}/devices", listDevices(st)) // unauthenticated, relay-api.yaml
@@ -44,11 +47,11 @@ func NewRouter(log *slog.Logger, st *store.Store, policy *limits.Policy, corsAll
 	mux.HandleFunc("GET /v1/push/vapid", getVapidPublicKey(notifier.vapidPub)) // unauthenticated, relay-api.yaml, ADR-0013
 	mux.HandleFunc("POST /v1/push", auth(postPushRegister(st)))
 	mux.HandleFunc("DELETE /v1/push", auth(deletePushRegister(st)))
-	mux.HandleFunc("GET /v1/ws", auth(serveWS(st, hub)))
+	mux.HandleFunc("GET /v1/ws", auth(serveWS(st, hub, allowedOrigins)))
 	// CORS outermost: an OPTIONS preflight to an unauthenticated route (e.g. the invite envelope
 	// GET) must never reach requestAuth, and method-specific mux patterns never match OPTIONS at
 	// all, so this has to sit in front of everything else.
-	return corsMiddleware(parseCommaList(corsAllowedOriginsCSV), logRequests(log, metricsMiddleware(mux)))
+	return corsMiddleware(allowedOrigins, logRequests(log, metricsMiddleware(mux)))
 }
 
 func NewInternalRouter() http.Handler {

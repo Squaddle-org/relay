@@ -107,3 +107,35 @@ func TestWSSubscribeAndFanout(t *testing.T) {
 		t.Fatalf("fanout event = %+v, want r=%s k=log", ev, roomRefBase32(roomID))
 	}
 }
+
+// coder/websocket's own Accept does its own origin check entirely separately from corsMiddleware
+// (see serveWS's doc comment) - confirms the fix: a cross-origin WS Dial with an Origin header
+// that's in -cors-allowed-origins succeeds, and one that isn't gets rejected during the upgrade.
+func TestWSOriginCheckMatchesCORSAllowedOrigins(t *testing.T) {
+	h := newTestRouterWithCORS(t, testAllowedOrigin)
+	server := httptest.NewServer(h)
+	defer server.Close()
+
+	owner := newTestActor(t, 30, "Owner Phone")
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/v1/ws"
+	wsHeader := authHeader(t, owner.devicePriv, owner.devicePub, http.MethodGet, "/v1/ws", nil)
+
+	t.Run("allowed origin connects", func(t *testing.T) {
+		conn, _, err := websocket.Dial(context.Background(), wsURL, &websocket.DialOptions{
+			HTTPHeader: http.Header{"Authorization": []string{wsHeader}, "Origin": []string{testAllowedOrigin}},
+		})
+		if err != nil {
+			t.Fatalf("Dial with allowed Origin: %v", err)
+		}
+		conn.Close(websocket.StatusNormalClosure, "")
+	})
+
+	t.Run("disallowed origin is rejected", func(t *testing.T) {
+		_, _, err := websocket.Dial(context.Background(), wsURL, &websocket.DialOptions{
+			HTTPHeader: http.Header{"Authorization": []string{wsHeader}, "Origin": []string{"https://evil.example"}},
+		})
+		if err == nil {
+			t.Fatal("Dial with a disallowed Origin should have failed the upgrade")
+		}
+	})
+}
