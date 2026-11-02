@@ -3,32 +3,19 @@ package api
 import (
 	"bytes"
 	"encoding/base64"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/squaddle-org/relay/internal/limits"
-	"github.com/squaddle-org/relay/internal/store"
 )
 
-func newTestRouter(t *testing.T) http.Handler {
-	t.Helper()
-	st, err := store.Open(":memory:")
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), st, limits.NewPolicy("none", ""), "", nil)
-}
-
+// newTestRouter is shared with control_plane_test.go - this file's own copy duplicated it under
+// an incompatible signature (found via a CI go-vet failure: "newTestRouter redeclared").
 func linkPath(code []byte) string {
 	return "/v1/link/" + base64.RawURLEncoding.EncodeToString(code)
 }
 
 func TestLinkMailboxRoundTripsAndSingleReadDeletes(t *testing.T) {
-	h := newTestRouter(t)
+	h, _ := newTestRouter(t)
 	code := []byte("0123456789abcdef")
 	blob := []byte("sealed bytes, opaque to the relay")
 
@@ -56,7 +43,7 @@ func TestLinkMailboxRoundTripsAndSingleReadDeletes(t *testing.T) {
 }
 
 func TestLinkMailboxGetMissingCodeReturns404(t *testing.T) {
-	h := newTestRouter(t)
+	h, _ := newTestRouter(t)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, linkPath([]byte("ffffffffffffffff")), nil))
 	if rec.Code != http.StatusNotFound {
@@ -69,7 +56,7 @@ func TestLinkMailboxGetMissingCodeReturns404(t *testing.T) {
 // gives every request in this test the same default RemoteAddr, so they all count against the
 // same bucket.
 func TestLinkMailboxGetIsRateLimited(t *testing.T) {
-	h := newTestRouter(t)
+	h, _ := newTestRouter(t)
 	var lastCode int
 	for i := 0; i < 31; i++ {
 		rec := httptest.NewRecorder()
@@ -82,7 +69,7 @@ func TestLinkMailboxGetIsRateLimited(t *testing.T) {
 }
 
 func TestLinkMailboxPostIsRateLimited(t *testing.T) {
-	h := newTestRouter(t)
+	h, _ := newTestRouter(t)
 	var lastCode int
 	for i := 0; i < 31; i++ {
 		rec := httptest.NewRecorder()
